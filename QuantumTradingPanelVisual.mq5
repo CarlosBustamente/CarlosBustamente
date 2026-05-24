@@ -56,7 +56,7 @@ input color                 InpMarketLineColor = clrWhite;       // Color linea 
 input color                 InpLimitLineColor  = clrGold;        // Color linea de entrada LIMIT
 input color                 InpSLLineColor     = clrRed;         // Color linea SL
 input color                 InpTPLineColor     = clrLimeGreen;   // Color linea TP
-input int                   InpCorner          = CORNER_LEFT_UPPER; // Esquina del panel
+input ENUM_BASE_CORNER      InpCorner          = CORNER_LEFT_UPPER; // Esquina del panel
 input int                   InpX               = 18;             // Posicion X
 input int                   InpY               = 2;              // Posicion Y
 input string                InpPanelTitle      = "QUANTUM TRADING"; // Titulo del panel
@@ -181,7 +181,7 @@ void OnChartEvent(const int id,
    else if(key == OBJ_CLOSEALL)
       CloseAllRequested();
 
-   ResetButtonState(sparam);
+   RefreshPanel();
    ChartRedraw(0);
   }
 
@@ -425,7 +425,7 @@ void CreateButton(const string key,
    ObjectSetInteger(0, name, OBJPROP_BORDER_COLOR, g_panel_border);
    ObjectSetInteger(0, name, OBJPROP_STATE, false);
    ObjectSetInteger(0, name, OBJPROP_BACK, false);
-   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, clickable);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_SELECTED, false);
    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
    ObjectSetInteger(0, name, OBJPROP_ZORDER, clickable ? 10 : 5);
@@ -509,12 +509,6 @@ void SetButtonStyle(const string key,
    ObjectSetInteger(0, name, OBJPROP_BORDER_COLOR, selected ? clrWhite : g_panel_border);
    ObjectSetInteger(0, name, OBJPROP_STATE, selected);
    ObjectSetInteger(0, name, OBJPROP_ZORDER, enabled ? 10 : 3);
-  }
-
-void ResetButtonState(const string object_name)
-  {
-   if(ObjectFind(0, object_name) >= 0)
-      ObjectSetInteger(0, object_name, OBJPROP_STATE, false);
   }
 
 //+------------------------------------------------------------------+
