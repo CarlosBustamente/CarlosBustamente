@@ -240,7 +240,7 @@ void HandleMouseMove(const int x, const int y, const string button_state)
       return;
    }
 
-   if(IsInsideButton(x, y))
+   if(!g_dragging && IsInsideButton(x, y))
       return;
 
    if(!g_dragging)
