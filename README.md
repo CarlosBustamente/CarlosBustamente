@@ -49,11 +49,11 @@ manejadores de eventos del EA).
 
 | Tarjeta | Contenido |
 |---|---|
-| **P&L Total** | Beneficio neto del rango filtrado (`G:` ganancia bruta, `P:` pérdida bruta). |
-| **Límite Diario Prop** | P&L del día (cerrado + flotante), restante hasta el límite diario y barra de consumo. |
-| **DD de Equity** | Diferencia balance − equity actual y su porcentaje. |
+| **P&L Total** | Beneficio neto del rango filtrado (`G:` ganancia bruta, `P:` pérdida bruta) y barra de progreso respecto a la base configurable `InpPnLBase` (100 por defecto): verde si el neto es positivo, roja si es negativo. |
+| **Operaciones Ganadoras** | Número de operaciones del periodo con beneficio neto positivo, su porcentaje sobre el total y la ganancia media. |
+| **Operaciones Perdedoras** | Número de operaciones del periodo con beneficio neto negativo, su porcentaje sobre el total y la pérdida media. |
 | **Operaciones / WR** | Número de operaciones, tasa de acierto y desglose ganadas/perdidas. |
-| **DD Máximo Histórico** | Caída desde el máximo histórico del balance y porcentaje consumido del DD permitido. |
+| **DD Máximo del Periodo** | Mayor caída pico-valle de la curva de balance dentro del rango filtrado, en dinero y %, con barra de consumo respecto a `InpMaxDrawdownPct`. |
 | **Swap y Comisión** | Totales de swap y comisión (+ fees) del rango. |
 
 Botones de rango temporal: **Hoy · Semana · Mes · Todo · Personalizado** (abre un selector de
@@ -95,8 +95,8 @@ La lista se desplaza con la rueda del ratón cuando hay muchos elementos.
 
 - `OnTradeTransaction` / `OnTrade` detectan nuevos deals y recargan el historial con un breve
   retardo (para que el deal ya esté disponible en el historial).
-- Un temporizador refresca las tarjetas dependientes de equity (DD de Equity, Límite Diario)
-  solo cuando el valor cambia.
+- Un temporizador comprueba periódicamente si hay una recarga pendiente del historial y
+  redibuja el panel cuando cambia el balance/equity de la cuenta.
 - `CHARTEVENT_CHART_CHANGE` redimensiona el panel al cambiar el tamaño del gráfico.
 
 ## Parámetros de entrada
@@ -108,8 +108,8 @@ La lista se desplaza con la rueda del ratón cuando hay muchos elementos.
 | | `InpStartMaximized` | Iniciar ocupando todo el gráfico. |
 | | `InpPanelX/Y/Width/Height` | Geometría en modo ventana. |
 | | `InpCleanChart` | Oculta el panel de trading con un clic y, en pantalla completa, las escalas de precio y tiempo (se restauran al quitar el EA). |
-| Riesgo | `InpDailyLossLimit` | Límite de pérdida diaria en dinero (0 = sin límite). |
-| | `InpMaxDrawdownPct` | DD máximo permitido desde el máximo histórico (%). |
+| Tarjetas | `InpPnLBase` | Base (dinero) de la barra de progreso de **P&L Total**; 100 por defecto, 0 = sin barra. |
+| | `InpMaxDrawdownPct` | DD tolerado (%) para la barra de **DD Máximo del Periodo**. |
 | Disciplina | `InpMaxTradesPerDay` | Umbral de sobre-trading (operaciones/día). |
 | | `InpRevengeMinutes` | Minutos tras una pérdida para marcar revenge trading. |
 | | `InpSLViolationFactor` | Factor sobre la pérdida mediana para marcar violación de stop. |

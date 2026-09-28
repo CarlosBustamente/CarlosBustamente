@@ -1716,7 +1716,7 @@ struct PControl_Settings
    int               y;
    int               w;
    int               h;
-   double            daily_loss_limit;
+   double            pnl_base;
    double            max_dd_pct;
    int               max_trades_day;
    int               revenge_minutes;
@@ -1813,7 +1813,7 @@ private:
    void              DrawCards(const int y,const int h);
    void              DrawCard(const int x,const int y,const int w,const int h,const string title,const color title_clr,
                               const string value,const color value_clr,const string sub,const color sub_clr,
-                              const double bar_ratio,const bool has_bar);
+                              const double bar_ratio,const bool has_bar,const color bar_clr=clrNONE);
    void              DrawTabs(const int y,const int h);
    void              DrawFilterPanel(const PControl_Rect &rc);
    void              DrawContent(const PControl_Rect &rc);
@@ -2107,36 +2107,28 @@ void PControl_Panel::DrawCards(const int y,const int h)
    if(cw<S(60)) cw=S(60);
    int x=pad;
 
-   //--- 1. P&L Total
+   //--- 1. P&L Total con barra de progreso sobre la base configurada (InpPnLBase)
+   double base=MathMax(0.0,m_set.pnl_base);
+   double pnl_ratio=(base>0 ? MathMin(1.0,MathAbs(m_stats.net)/base) : 0.0);
    string v1=PControl_Money(m_stats.net)+" "+m_currency;
    string s1=StringFormat("G: %s | P: %s",PControl_Money(m_stats.gross_win),PControl_Money(m_stats.gross_loss));
-   DrawCard(x,y,cw,h,"P&L Total",PControl_CLR_TEXT_DIM,v1,PControl_PnLColor(m_stats.net),s1,PControl_CLR_TEXT_MUTED,0,false);
+   if(base>0) s1+=StringFormat(" · %s de %s",PControl_Pct(MathAbs(m_stats.net)/base*100.0,0),PControl_Money(base,0));
+   color pnl_bar=(m_stats.net>=0 ? PControl_CLR_GREEN : PControl_CLR_RED);
+   DrawCard(x,y,cw,h,"P&L Total",PControl_CLR_TEXT_DIM,v1,PControl_PnLColor(m_stats.net),s1,PControl_CLR_TEXT_MUTED,pnl_ratio,base>0,pnl_bar);
    x+=cw+gap;
 
-   //--- 2. Límite diario (prop)
-   PControl_PosRecord today[];
-   datetime ds=PControl_DayStart(TimeCurrent());
-   m_data.CollectInRange(ds,(datetime)((long)ds+86399),today);
-   double today_closed=0;
-   for(int i=0; i<ArraySize(today); i++) today_closed+=today[i].net;
-   double floating=(m_data.DemoMode() ? 0.0 : AccountInfoDouble(ACCOUNT_PROFIT));
-   double today_pnl=today_closed+floating;
-   double limit=MathMax(0.0,m_set.daily_loss_limit);
-   double used=(limit>0 ? MathMin(1.0,MathMax(0.0,-today_pnl)/limit) : 0.0);
-   double remaining=(limit>0 ? MathMax(0.0,limit+MathMin(0.0,today_pnl)) : 0.0);
-   string v2=PControl_Signed(today_pnl)+" "+m_currency;
-   string s2=(limit>0 ? "Restante: "+PControl_Money(remaining) : "Sin límite configurado");
-   color c2=(today_pnl<0 ? (used>0.8 ? PControl_CLR_RED : PControl_CLR_ORANGE) : (today_pnl>0 ? PControl_CLR_GREEN : PControl_CLR_ORANGE));
-   DrawCard(x,y,cw,h,"Límite Diario Prop",PControl_CLR_CYAN,v2,c2,s2,PControl_CLR_TEXT_MUTED,used,limit>0);
+   //--- 2. Operaciones ganadoras del periodo (con beneficio neto > 0)
+   double win_share=(m_stats.trades>0 ? 100.0*m_stats.wins/m_stats.trades : 0.0);
+   string v2=IntegerToString(m_stats.wins);
+   string s2=StringFormat("%s del total | Media: %s",PControl_Pct(win_share,1),PControl_Signed(m_stats.avg_win));
+   DrawCard(x,y,cw,h,"Operaciones Ganadoras",PControl_CLR_GREEN,v2,PControl_CLR_GREEN,s2,PControl_CLR_TEXT_MUTED,0,false);
    x+=cw+gap;
 
-   //--- 3. DD de Equity
-   double balance=(m_data.DemoMode() ? m_data.CurrentBalance() : AccountInfoDouble(ACCOUNT_BALANCE));
-   double equity=(m_data.DemoMode() ? balance-floating : AccountInfoDouble(ACCOUNT_EQUITY));
-   double eq_dd=MathMax(0.0,balance-equity);
-   double eq_pct=(balance>0 ? eq_dd/balance*100.0 : 0.0);
-   string v3=PControl_Money(eq_dd)+" "+m_currency;
-   DrawCard(x,y,cw,h,"DD de Equity",PControl_CLR_TEXT_DIM,v3,(eq_dd>0 ? PControl_CLR_RED : PControl_CLR_GREEN),"("+PControl_Pct(eq_pct)+")",PControl_CLR_TEXT_MUTED,0,false);
+   //--- 3. Operaciones perdedoras del periodo (con beneficio neto < 0)
+   double loss_share=(m_stats.trades>0 ? 100.0*m_stats.losses/m_stats.trades : 0.0);
+   string v3=IntegerToString(m_stats.losses);
+   string s3=StringFormat("%s del total | Media: %s",PControl_Pct(loss_share,1),PControl_Signed(m_stats.avg_loss));
+   DrawCard(x,y,cw,h,"Operaciones Perdedoras",PControl_CLR_RED,v3,PControl_CLR_RED,s3,PControl_CLR_TEXT_MUTED,0,false);
    x+=cw+gap;
 
    //--- 4. Operaciones / WR
@@ -2145,14 +2137,14 @@ void PControl_Panel::DrawCards(const int y,const int h)
    DrawCard(x,y,cw,h,"Operaciones / WR",PControl_CLR_TEXT_DIM,v4,PControl_CLR_WHITE,s4,PControl_CLR_TEXT_MUTED,0,false);
    x+=cw+gap;
 
-   //--- 5. DD desde máximo histórico
-   double hwm=m_data.HighWatermark();
-   double hwm_dd=MathMax(0.0,hwm-balance);
-   double allowed=(m_set.max_dd_pct>0 ? hwm*m_set.max_dd_pct/100.0 : 0.0);
-   double hwm_used=(allowed>0 ? MathMin(1.0,hwm_dd/allowed) : 0.0);
-   string v5=PControl_Money(hwm_dd)+" "+m_currency;
-   string s5=(allowed>0 ? "Usado: "+PControl_Pct(hwm_used*100.0,1) : "Máx: "+PControl_Money(hwm));
-   DrawCard(x,y,cw,h,"DD Máximo Histórico",PControl_CLR_PURPLE,v5,(hwm_dd>0 ? PControl_CLR_RED : PControl_CLR_GREEN),s5,PControl_CLR_TEXT_MUTED,hwm_used,allowed>0);
+   //--- 5. Drawdown máximo del periodo filtrado (pico-valle de la curva de balance)
+   double dd_money=m_stats.max_dd_money;
+   double dd_pct=m_stats.max_dd_pct;
+   double dd_allowed=MathMax(0.0,m_set.max_dd_pct);
+   double dd_used=(dd_allowed>0 ? MathMin(1.0,dd_pct/dd_allowed) : 0.0);
+   string v5=PControl_Money(dd_money)+" "+m_currency;
+   string s5=PControl_Pct(dd_pct,2)+(dd_allowed>0 ? " | Tolerado: "+PControl_Pct(dd_allowed,0) : "");
+   DrawCard(x,y,cw,h,"DD Máximo del Periodo",PControl_CLR_PURPLE,v5,(dd_money>0 ? PControl_CLR_RED : PControl_CLR_GREEN),s5,PControl_CLR_TEXT_MUTED,dd_used,dd_allowed>0);
    x+=cw+gap;
 
    //--- 6. Swap y Comisión (dos líneas)
@@ -2167,17 +2159,18 @@ void PControl_Panel::DrawCards(const int y,const int h)
 //+------------------------------------------------------------------+
 void PControl_Panel::DrawCard(const int x,const int y,const int w,const int h,const string title,const color title_clr,
                       const string value,const color value_clr,const string sub,const color sub_clr,
-                      const double bar_ratio,const bool has_bar)
+                      const double bar_ratio,const bool has_bar,const color bar_clr)
   {
    m_r.Box(x,y,w,h,PControl_CLR_PANEL,PControl_CLR_BORDER);
    m_r.Text(x+w/2,y+S(5),title,title_clr,FS(11),TA_CENTER|TA_TOP,true);
    m_r.Text(x+w/2,y+S(18),value,value_clr,FS(16),TA_CENTER|TA_TOP,true);
-   m_r.Text(x+w/2,y+S(38),sub,sub_clr,FS(9),TA_CENTER|TA_TOP,false);
+   m_r.Text(x+w/2,y+S(38),m_r.Ellipsis(sub,w-S(8),FS(9)),sub_clr,FS(9),TA_CENTER|TA_TOP,false);
    if(has_bar)
      {
       int bx=x+S(6), bw=w-S(12), by=y+h-S(5), bh=S(2);
       m_r.Fill(bx,by,bw,bh,PControl_CLR_BORDER2);
-      color bc=(bar_ratio<0.5 ? PControl_CLR_GREEN : (bar_ratio<0.8 ? PControl_CLR_ORANGE : PControl_CLR_RED));
+      // sin color explícito: semáforo de "consumo" (verde -> naranja -> rojo)
+      color bc=(bar_clr!=clrNONE ? bar_clr : (bar_ratio<0.5 ? PControl_CLR_GREEN : (bar_ratio<0.8 ? PControl_CLR_ORANGE : PControl_CLR_RED)));
       int fwid=(int)MathRound(bw*MathMax(0.0,MathMin(1.0,bar_ratio)));
       if(fwid>0) m_r.Fill(bx,by,fwid,bh,bc);
      }
@@ -3758,9 +3751,9 @@ input int      InpPanelWidth      = 1024;      // Ancho (modo ventana)
 input int      InpPanelHeight     = 560;       // Alto (modo ventana)
 input bool     InpCleanChart      = true;      // Ocultar panel de un clic y escalas en pantalla completa
 
-input group "=== Gestión de riesgo (tarjetas superiores) ==="
-input double   InpDailyLossLimit  = 500.0;     // Límite de pérdida diaria (dinero, 0 = sin límite)
-input double   InpMaxDrawdownPct  = 10.0;      // Drawdown máximo permitido desde el máximo histórico (%)
+input group "=== Tarjetas superiores ==="
+input double   InpPnLBase         = 100.0;     // Base de la barra de P&L Total (dinero, 0 = sin barra)
+input double   InpMaxDrawdownPct  = 10.0;      // Drawdown máximo tolerado del periodo (%) para la barra de DD
 
 input group "=== Análisis de disciplina (Estadísticas Arena) ==="
 input int      InpMaxTradesPerDay = 3;         // Umbral de sobre-trading (operaciones por día)
@@ -3789,7 +3782,7 @@ int OnInit()
    s.y               =InpPanelY;
    s.w               =InpPanelWidth;
    s.h               =InpPanelHeight;
-   s.daily_loss_limit=InpDailyLossLimit;
+   s.pnl_base        =InpPnLBase;
    s.max_dd_pct      =InpMaxDrawdownPct;
    s.max_trades_day  =InpMaxTradesPerDay;
    s.revenge_minutes =InpRevengeMinutes;
