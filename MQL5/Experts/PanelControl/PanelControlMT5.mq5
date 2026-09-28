@@ -22,6 +22,7 @@ input int      InpPanelX          = 10;        // Posición X (modo ventana)
 input int      InpPanelY          = 10;        // Posición Y (modo ventana)
 input int      InpPanelWidth      = 1024;      // Ancho (modo ventana)
 input int      InpPanelHeight     = 560;       // Alto (modo ventana)
+input bool     InpCleanChart      = true;      // Ocultar panel de un clic y escalas en pantalla completa
 
 input group "=== Gestión de riesgo (tarjetas superiores) ==="
 input double   InpDailyLossLimit  = 500.0;     // Límite de pérdida diaria (dinero, 0 = sin límite)
@@ -34,6 +35,9 @@ input double   InpSLViolationFactor = 1.3;     // Factor sobre la pérdida media
 
 input group "=== Actualización ==="
 input int      InpRefreshMs       = 1000;      // Intervalo de refresco de equity (ms)
+
+input group "=== Demostración ==="
+input bool     InpDemoData        = false;     // Usar datos de ejemplo en lugar del historial real
 
 //--- instancia única del panel
 CPanel g_panel;
@@ -57,6 +61,8 @@ int OnInit()
    s.revenge_minutes =InpRevengeMinutes;
    s.sl_factor       =InpSLViolationFactor;
    s.refresh_ms      =InpRefreshMs;
+   s.demo_data       =InpDemoData;
+   s.clean_chart     =InpCleanChart;
 
    if(!g_panel.Init(s))
       return(INIT_FAILED);

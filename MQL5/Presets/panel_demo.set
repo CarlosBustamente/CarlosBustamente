@@ -1,0 +1,3 @@
+InpDemoData=true
+InpDailyLossLimit=500.0
+InpMaxDrawdownPct=10.0

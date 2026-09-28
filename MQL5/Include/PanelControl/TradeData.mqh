@@ -210,17 +210,24 @@ private:
    double            m_sl_factor;
    //--- resultado filtrado
    SPosRecord        m_filtered[];
+   //--- modo de datos de ejemplo
+   bool              m_demo_mode;
+   double            m_cur_balance;
 
    void              RebuildSymbolList();
    void              RebuildMagicList();
    bool              SymbolEnabled(const string s) const;
    bool              MagicEnabled(const long m) const;
    bool              PassStaticFilters(const SPosRecord &r) const;
+   void              GenerateDemo();
 
 public:
                      CTradeData();
 
    void              SetDisciplineParams(const int max_trades_day,const int revenge_minutes,const double sl_factor);
+   void              SetDemoMode(const bool on) { m_demo_mode=on; }
+   bool              DemoMode() const { return(m_demo_mode); }
+   double            CurrentBalance() const { return(m_cur_balance); }
    bool              Reload();
 
    //--- rango temporal
@@ -272,8 +279,88 @@ public:
 
 //+------------------------------------------------------------------+
 CTradeData::CTradeData() : m_initial_balance(0),m_buy_on(true),m_sell_on(true),m_from(0),m_to(D'2100.01.01'),
-                           m_max_trades_day(3),m_revenge_minutes(5),m_sl_factor(1.3)
+                           m_max_trades_day(3),m_revenge_minutes(5),m_sl_factor(1.3),
+                           m_demo_mode(false),m_cur_balance(0)
   {
+  }
+
+//+------------------------------------------------------------------+
+//| Datos sintéticos para previsualizar el panel sin historial        |
+//+------------------------------------------------------------------+
+void CTradeData::GenerateDemo()
+  {
+   string syms[7]={"EURUSD","GBPUSD","XAUUSD","US30","USTEC","DE40","XTIUSD"};
+   long   magics[3]={0,1001,2002};
+   MathSrand(20240917);
+
+   datetime now=TimeCurrent();
+   datetime start=PC_DayStart((datetime)((long)now-40*86400));
+   SPosRecord recs[];
+   int n=0;
+   double running=10000.0;
+   m_initial_balance=running;
+   ArrayResize(m_bal_t,0);
+   ArrayResize(m_bal_v,0);
+
+   for(int day=0; day<41; day++)
+     {
+      datetime d=(datetime)((long)start+(long)day*86400);
+      int dow=PC_WeekDay(d);
+      if(dow>=5) continue;                       // sin fines de semana
+      if(d>now) break;
+      int trades_today=MathRand()%4;             // 0..3 operaciones
+      if(MathRand()%5==0) trades_today+=2;       // algún día con sobre-trading
+      for(int k=0; k<trades_today; k++)
+        {
+         SPosRecord r;
+         PC_ResetRecord(r);
+         int hour=6+MathRand()%16;
+         int minute=MathRand()%60;
+         r.open_time=(datetime)((long)d+hour*3600+minute*60);
+         long dur=300+(long)(MathRand()%(6*3600));
+         r.close_time=(datetime)((long)r.open_time+dur);
+         if(r.close_time>now) continue;
+         r.position_id=100000+n;
+         r.symbol=syms[MathRand()%7];
+         r.magic=magics[MathRand()%3];
+         r.type=MathRand()%2;
+         r.vol_in=0.1*(1+MathRand()%10);
+         r.vol_out=r.vol_in;
+         r.open_price=1.0+(MathRand()%1000)/1000.0;
+         r.close_price=r.open_price+((MathRand()%200)-100)/10000.0;
+         bool win=(MathRand()%100)<66;
+         double base=(win ? 5.0+MathRand()%56 : -(4.0+MathRand()%42));
+         if(!win && MathRand()%9==0) base*=2.2;  // alguna violación de stop
+         r.profit=NormalizeDouble(base*(0.5+r.vol_in),2);
+         r.swap=NormalizeDouble(-(MathRand()%30)/100.0,2);
+         r.commission=NormalizeDouble(-5.0*r.vol_in,2);
+         r.net=NormalizeDouble(r.profit+r.swap+r.commission,2);
+         r.comment="demo";
+         r.closed=true;
+         ArrayResize(recs,n+1);
+         recs[n]=r;
+         n++;
+        }
+     }
+
+   //--- orden por cierre y curva de balance
+   long keys[];
+   ArrayResize(keys,n);
+   for(int i=0; i<n; i++) keys[i]=(long)recs[i].close_time*1000000+i;
+   if(n>1) ArraySort(keys);
+   ArrayResize(m_all,n);
+   ArrayResize(m_bal_t,n+1);
+   ArrayResize(m_bal_v,n+1);
+   m_bal_t[0]=(datetime)((long)start-86400);
+   m_bal_v[0]=running;
+   for(int i=0; i<n; i++)
+     {
+      m_all[i]=recs[(int)(keys[i]%1000000)];
+      running+=m_all[i].net;
+      m_bal_t[i+1]=m_all[i].close_time;
+      m_bal_v[i+1]=running;
+     }
+   m_cur_balance=running;
   }
 
 //+------------------------------------------------------------------+
@@ -289,6 +376,14 @@ void CTradeData::SetDisciplineParams(const int max_trades_day,const int revenge_
 //+------------------------------------------------------------------+
 bool CTradeData::Reload()
   {
+   if(m_demo_mode)
+     {
+      GenerateDemo();
+      RebuildSymbolList();
+      RebuildMagicList();
+      ApplyFilter();
+      return(true);
+     }
    if(!HistorySelect(0,TimeCurrent()+86400*2))
      {
       Print("PanelControl: HistorySelect falló (",GetLastError(),")");
@@ -407,6 +502,7 @@ bool CTradeData::Reload()
    double acc_balance=AccountInfoDouble(ACCOUNT_BALANCE);
    double offset=acc_balance-running;
    m_initial_balance=offset;
+   m_cur_balance=acc_balance;
    int bn=ArraySize(m_bal_v);
    for(int i=0; i<bn; i++) m_bal_v[i]+=offset;
 
@@ -602,7 +698,7 @@ void CTradeData::CollectNoTime(SPosRecord &out[]) const
 double CTradeData::BalanceAt(const datetime t) const
   {
    int n=ArraySize(m_bal_t);
-   if(n==0) return(AccountInfoDouble(ACCOUNT_BALANCE));
+   if(n==0) return(m_cur_balance);
    if(t<m_bal_t[0]) return(m_initial_balance);
    int lo=0, hi=n-1;
    while(lo<hi)
@@ -616,7 +712,7 @@ double CTradeData::BalanceAt(const datetime t) const
 //+------------------------------------------------------------------+
 double CTradeData::HighWatermark() const
   {
-   double hwm=MathMax(m_initial_balance,AccountInfoDouble(ACCOUNT_BALANCE));
+   double hwm=MathMax(m_initial_balance,m_cur_balance);
    for(int i=0; i<ArraySize(m_bal_v); i++) if(m_bal_v[i]>hwm) hwm=m_bal_v[i];
    return(hwm);
   }
