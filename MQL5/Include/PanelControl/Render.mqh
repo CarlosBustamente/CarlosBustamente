@@ -239,20 +239,24 @@ void CRender::Circle(const int cx,const int cy,const int r,const color clr)
 //+------------------------------------------------------------------+
 void CRender::Ring(const int cx,const int cy,const int r_out,const int r_in,double a_from,double a_to,const color clr)
   {
+   //--- rasterizado por píxel: evita CCanvas::FillPolygon, que puede
+   //    quedarse en bucle con polígonos degenerados (casi colineales)
    if(a_to<a_from) { double t=a_to; a_to=a_from; a_from=t; }
-   if(a_to-a_from<0.01) return;
+   if(a_to-a_from<0.01 || r_out<=0) return;
    uint c=ToARGB(clr);
-   int xs[4], ys[4];
-   double step=2.0;
-   for(double a=a_from; a<a_to; a+=step)
+   double ro2=(double)r_out*r_out, ri2=(double)MathMax(0,r_in)*MathMax(0,r_in);
+   for(int dy=-r_out; dy<=r_out; dy++)
      {
-      double a2=MathMin(a+step,a_to);
-      double r1=a*M_PI/180.0, r2=a2*M_PI/180.0;
-      xs[0]=cx+(int)MathRound(r_out*MathCos(r1)); ys[0]=cy-(int)MathRound(r_out*MathSin(r1));
-      xs[1]=cx+(int)MathRound(r_out*MathCos(r2)); ys[1]=cy-(int)MathRound(r_out*MathSin(r2));
-      xs[2]=cx+(int)MathRound(r_in*MathCos(r2));  ys[2]=cy-(int)MathRound(r_in*MathSin(r2));
-      xs[3]=cx+(int)MathRound(r_in*MathCos(r1));  ys[3]=cy-(int)MathRound(r_in*MathSin(r1));
-      m_canvas.FillPolygon(xs,ys,c);
+      for(int dx=-r_out; dx<=r_out; dx++)
+        {
+         double d2=(double)dx*dx+(double)dy*dy;
+         if(d2>ro2 || d2<ri2) continue;
+         double ang=MathArctan2(-(double)dy,(double)dx)*180.0/M_PI;   // pantalla: y hacia abajo
+         if(ang<0.0) ang+=360.0;
+         bool inside=(ang>=a_from && ang<=a_to);
+         if(!inside && a_to>360.0) inside=(ang+360.0>=a_from && ang+360.0<=a_to);
+         if(inside) m_canvas.PixelSet(cx+dx,cy+dy,c);
+        }
      }
   }
 
