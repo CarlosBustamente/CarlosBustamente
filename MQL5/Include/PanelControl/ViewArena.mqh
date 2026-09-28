@@ -41,7 +41,9 @@ void CPanel::DrawArenaOverview(const SRect &rc)
   {
    int gap=S(8);
    int cw=(rc.w-2*gap)/3;
-   int row1_h=S(74), row2_h=S(76), row3_h=S(74);
+   int row1_h=MathMax(S(74),(int)(rc.h*0.17));
+   int row2_h=MathMax(S(96),(int)(rc.h*0.24));
+   int row3_h=MathMax(S(74),(int)(rc.h*0.19));
    int row4_h=rc.h-row1_h-row2_h-row3_h-3*gap;
    if(row4_h<S(56)) row4_h=S(56);
 
@@ -85,8 +87,8 @@ void CPanel::DrawArenaOverview(const SRect &rc)
    int mx=rc.x+2*(cw+gap), mw=rc.w-2*(cw+gap);
    m_r.Box(mx,y,mw,row2_h,PC_CLR_PANEL2,m_clr);
    m_r.Text(mx+mw/2,y+S(8),"Tasa de Errores",PC_CLR_TEXT_DIM,FS(11),TA_CENTER|TA_TOP,true);
-   m_r.Text(mx+mw/2,y+S(26),PC_Pct(mr,1),m_clr,FS(17),TA_CENTER|TA_TOP,true);
-   m_r.Text(mx+mw/2,y+S(52),m_rating,PC_CLR_TEXT_MUTED,FS(9),TA_CENTER|TA_TOP,false);
+   m_r.Text(mx+mw/2,y+row2_h/2,PC_Pct(mr,1),m_clr,FS(20),TA_CENTER|TA_VCENTER,true);
+   m_r.Text(mx+mw/2,y+row2_h-S(8),m_rating,PC_CLR_TEXT_MUTED,FS(10),TA_CENTER|TA_BOTTOM,false);
 
    //--- fila 3: análisis textual
    y+=row2_h+gap;
@@ -199,13 +201,13 @@ void CPanel::ArenaGaugeCard(const int x,const int y,const int w,const int h,cons
    m_r.Text(x+w/2,y+S(5),title,PC_CLR_TEXT_DIM,FS(10),TA_CENTER|TA_TOP,false);
    double sc=MathMax(0.0,MathMin(100.0,score));
    color c=(sc<50.0 ? PC_CLR_RED : (sc<75.0 ? PC_CLR_ORANGE : PC_CLR_GREEN));
-   int r_out=MathMin(S(26),(h-S(26))*3/4);
-   int r_in=MathMax(S(4),r_out-S(6));
+   int r_out=MathMin(S(52),h-S(34));
+   int r_in=MathMax(S(6),r_out-MathMax(S(7),r_out/5));
    int cx=x+w/2, cy=y+h-S(14);
    m_r.Ring(cx,cy,r_out,r_in,0.0,180.0,PC_CLR_PANEL3);
    if(sc>0.0) m_r.Ring(cx,cy,r_out,r_in,180.0-180.0*sc/100.0,180.0,c);
-   m_r.Text(cx,cy-S(4),IntegerToString((int)MathRound(sc)),PC_CLR_WHITE,FS(15),TA_CENTER|TA_BOTTOM,true);
-   m_r.Text(cx,cy+S(1),"/100",PC_CLR_TEXT_MUTED,FS(8),TA_CENTER|TA_TOP,false);
+   m_r.Text(cx,cy-S(3),IntegerToString((int)MathRound(sc)),PC_CLR_WHITE,FS(MathMax(15,r_out/2)),TA_CENTER|TA_BOTTOM,true);
+   m_r.Text(cx,cy+S(1),"/100",PC_CLR_TEXT_MUTED,FS(9),TA_CENTER|TA_TOP,false);
   }
 
 //+------------------------------------------------------------------+
@@ -215,16 +217,16 @@ void CPanel::ArenaTextCard(const int x,const int y,const int w,const int h,const
   {
    m_r.Box(x,y,w,h,PC_CLR_PANEL2,frame);
    m_r.Text(x+S(10),y+S(6),title,frame,FS(11),TA_LEFT|TA_TOP,true);
-   int ty=y+S(24), lh=S(13);
+   int ty=y+S(26), lh=S(15);
    int inner=w-S(20);
    for(int i=0; i<ArraySize(lines); i++)
      {
       string wrapped[];
-      int n=m_r.WrapText(lines[i],inner,FS(9),false,wrapped);
+      int n=m_r.WrapText(lines[i],inner,FS(10),false,wrapped);
       for(int j=0; j<n; j++)
         {
          if(ty+lh>y+h-S(4)) return;
-         m_r.Text(x+S(10),ty,wrapped[j],PC_CLR_TEXT_DIM,FS(9),TA_LEFT|TA_TOP,false);
+         m_r.Text(x+S(10),ty,wrapped[j],PC_CLR_TEXT_DIM,FS(10),TA_LEFT|TA_TOP,false);
          ty+=lh;
         }
      }
@@ -291,8 +293,11 @@ void CPanel::DrawArenaAdvanced(const SRect &rc)
    int rows_fit=MathMax(1,(rc.h-S(6))/rowh);
    int cols=(n+rows_fit-1)/rows_fit;
    if(cols<1) cols=1;
-   if(cols>3) { cols=3; rows_fit=(n+2)/3; rowh=MathMax(S(12),(rc.h-S(6))/rows_fit); }
-   if(cols==1 && rc.w>S(520)) { cols=2; rows_fit=(n+1)/2; }
+   if(cols>3) cols=3;
+   if(cols==1 && rc.w>S(520)) cols=2;
+   // reparto equilibrado: misma cantidad de filas (±1) en cada columna
+   rows_fit=(n+cols-1)/cols;
+   if(rows_fit*rowh+S(6)>rc.h) rowh=MathMax(S(12),(rc.h-S(6))/rows_fit);
    int cw=(rc.w-(cols-1)*gap)/cols;
 
    for(int c=0; c<cols; c++)

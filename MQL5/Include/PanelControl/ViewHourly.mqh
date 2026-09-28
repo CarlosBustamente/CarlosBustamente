@@ -77,6 +77,7 @@ void CPanel::DrawHourlyView(const SRect &rc)
    int label_w=S(40), tot_w=MathMax(S(60),(int)(gw*0.075)), hdr_h=S(16);
    int cell_w=(gw-label_w-tot_w-S(8))/24;
    int cell_h=(gh-hdr_h-S(6))/8;
+   if(cell_h>cell_w*5/4) cell_h=cell_w*5/4;
    if(cell_w<S(14) || cell_h<S(14))
      {
       DrawEmpty(rc,"El panel es demasiado pequeño para el mapa de calor");
@@ -107,7 +108,7 @@ void CPanel::DrawHourlyView(const SRect &rc)
             continue;
            }
          color c=PC_PnLColor(net[k]);
-         m_r.Box(cx,cy,inner_w,inner_h,PC_Mix(c,PC_CLR_PANEL,0.8),c);
+         m_r.Box(cx,cy,inner_w,inner_h,PC_Mix(c,PC_CLR_PANEL,0.86),c);
          m_r.Text(cx+inner_w/2,cy+inner_h/2-S(5),PC_CellValue(net[k]),c,FS(small_font ? 9 : 10),TA_CENTER|TA_VCENTER,true);
          m_r.Text(cx+inner_w/2,cy+inner_h-S(3),IntegerToString(cnt[k])+"T",PC_CLR_TEXT_MUTED,FS(8),TA_CENTER|TA_BOTTOM,false);
          Hit(cx,cy,inner_w,inner_h,ACT_HOUR_CELL,d,h);
@@ -137,7 +138,7 @@ void CPanel::DrawHourlyView(const SRect &rc)
       color c=PC_PnLColor(cnet[h]);
       m_r.Box(cx,cy,inner_w,inner_h,PC_Mix(c,PC_CLR_PANEL,0.86),c);
       string txt=(small_font ? PC_CellValue(cnet[h]) : PC_Signed(cnet[h]));
-      m_r.Text(cx+inner_w/2,cy+inner_h/2,txt,c,FS(8),TA_CENTER|TA_VCENTER,true);
+      m_r.Text(cx+inner_w/2,cy+inner_h/2,txt,c,FS(small_font ? 8 : 9),TA_CENTER|TA_VCENTER,true);
      }
    color gcol=PC_PnLColor(gnet);
    if(gcnt>0)

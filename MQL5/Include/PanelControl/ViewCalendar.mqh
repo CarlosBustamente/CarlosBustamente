@@ -125,7 +125,7 @@ void CPanel::DrawCalendarView(const SRect &rc)
 
          SDayStat ds=days[di];
          color c=PC_PnLColor(ds.net);
-         m_r.Box(cx,cy,cwid,ch,PC_Mix(c,PC_CLR_PANEL,0.86),c);
+         m_r.Box(cx,cy,cwid,ch,PC_Mix(c,PC_CLR_PANEL,0.9),c);
          if(d==today) m_r.Frame(cx+1,cy+1,cwid-2,ch-2,PC_CLR_BLUE_LIGHT);
          m_r.Text(cx+S(3),cy+S(2),IntegerToString(day),PC_CLR_TEXT_MUTED,FS(8),TA_LEFT|TA_TOP,false);
 
@@ -172,7 +172,7 @@ void CPanel::DrawCalendarView(const SRect &rc)
          color wc=PC_PnLColor(wnet);
          double wbal=m_data.BalanceAt((datetime)((long)MathMax((long)week_start,(long)month_start)-1));
          double wpct=(wbal>0 ? wnet/wbal*100.0 : 0.0);
-         m_r.Box(totals_x,cy,tot_w,ch,PC_Mix(wc,PC_CLR_PANEL,0.86),wc);
+         m_r.Box(totals_x,cy,tot_w,ch,PC_Mix(wc,PC_CLR_PANEL,0.9),wc);
          m_r.Text(totals_x+tot_w/2,cy+ch/2-S(7),PC_Signed(wnet),wc,FS(11),TA_CENTER|TA_VCENTER,true);
          m_r.Text(totals_x+tot_w/2,cy+ch/2+S(8),PC_Pct(wpct),wc,FS(9),TA_CENTER|TA_VCENTER,false);
         }
