@@ -10,6 +10,7 @@ automática al tamaño del gráfico.
 ```
 MQL5/
 ├── Experts/PanelControl/PanelControlMT5.mq5     ← Expert Advisor (punto de entrada)
+├── Presets/panel_demo.set                        ← preset con el modo de demostración activado
 └── Include/PanelControl/
     ├── PanelControl.mqh                          ← inclusión única de la librería
     ├── Config.mqh                                ← paleta de colores, enumeraciones, textos
@@ -27,7 +28,7 @@ MQL5/
 
 1. Abre MetaTrader 5 → `Archivo` → `Abrir carpeta de datos`.
 2. Copia la carpeta `MQL5` de este repositorio sobre la carpeta `MQL5` del terminal
-   (se fusionarán `Experts` e `Include`).
+   (se fusionarán `Experts`, `Include` y `Presets`).
 3. En MetaEditor abre `MQL5/Experts/PanelControl/PanelControlMT5.mq5` y pulsa **Compilar** (F7).
 4. En el terminal, arrastra `PanelControlMT5` desde el Navegador (`Asesores Expertos`) a
    cualquier gráfico. No requiere permiso de trading automático.
@@ -99,12 +100,16 @@ La lista se desplaza con la rueda del ratón cuando hay muchos elementos.
 | | `InpUIScale` | Escala de toda la interfaz (1.0 = 100%, útil en pantallas HiDPI). |
 | | `InpStartMaximized` | Iniciar ocupando todo el gráfico. |
 | | `InpPanelX/Y/Width/Height` | Geometría en modo ventana. |
+| | `InpCleanChart` | Oculta el panel de trading con un clic y, en pantalla completa, las escalas de precio y tiempo (se restauran al quitar el EA). |
 | Riesgo | `InpDailyLossLimit` | Límite de pérdida diaria en dinero (0 = sin límite). |
 | | `InpMaxDrawdownPct` | DD máximo permitido desde el máximo histórico (%). |
 | Disciplina | `InpMaxTradesPerDay` | Umbral de sobre-trading (operaciones/día). |
 | | `InpRevengeMinutes` | Minutos tras una pérdida para marcar revenge trading. |
 | | `InpSLViolationFactor` | Factor sobre la pérdida mediana para marcar violación de stop. |
 | Actualización | `InpRefreshMs` | Intervalo del temporizador (ms). |
+| Demostración | `InpDemoData` | Genera un historial sintético de ~40 días (7 símbolos, 3 mágicos) para probar el panel en cuentas sin operaciones. La cabecera muestra `DATOS DE EJEMPLO`. |
+
+En `MQL5/Presets/panel_demo.set` hay un preset con el modo de demostración activado.
 
 ## Definición de las métricas
 
@@ -135,3 +140,7 @@ La lista se desplaza con la rueda del ratón cuando hay muchos elementos.
   desplazamiento del gráfico se desactiva mientras el cursor está sobre el panel y se
   restaura al salir.
 - `Esc` cierra cualquier ventana emergente; clic fuera de ella también la cierra.
+- Los anillos de los medidores se rasterizan píxel a píxel en lugar de usar
+  `CCanvas::FillPolygon`, que puede entrar en un bucle infinito con polígonos degenerados.
+- Compilado con MetaEditor 5 (build 6231) sin errores ni avisos y probado en un terminal
+  real con el modo de demostración.
