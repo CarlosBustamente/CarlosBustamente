@@ -43,6 +43,8 @@ struct SPanelSettings
    int               revenge_minutes;
    double            sl_factor;
    int               refresh_ms;
+   bool              demo_data;
+   bool              clean_chart;
   };
 
 //+------------------------------------------------------------------+
@@ -87,6 +89,10 @@ private:
    bool              m_left_down;
    bool              m_chart_scroll_orig;
    bool              m_scroll_disabled;
+   bool              m_oneclick_orig;
+   bool              m_price_scale_orig;
+   bool              m_date_scale_orig;
+   void              ApplyChartMode();
    bool              m_hover_plot;
 
    //--- mapa de clics
@@ -176,7 +182,8 @@ CPanel::CPanel() : m_currency("USD"),m_range(RANGE_ALL),m_tab(TAB_CHART),m_ftab(
                    m_tx_page(0),m_tx_pages(1),m_filter_scroll(0),m_custom_from(0),m_custom_to(0),
                    m_popup(POPUP_NONE),m_popup_p1(0),m_popup_p2(0),m_dp_view(0),m_dp_stage(0),
                    m_mouse_x(-1),m_mouse_y(-1),m_mouse_inside(false),m_left_down(false),
-                   m_chart_scroll_orig(true),m_scroll_disabled(false),m_hover_plot(false),
+                   m_chart_scroll_orig(true),m_scroll_disabled(false),m_oneclick_orig(false),
+                   m_price_scale_orig(true),m_date_scale_orig(true),m_hover_plot(false),
                    m_hit_count(0),m_plot_points(0),m_reload_pending(false),m_reload_due(0),
                    m_last_equity(0),m_last_balance(0)
   {
@@ -210,6 +217,9 @@ bool CPanel::Init(const SPanelSettings &settings)
    m_custom_to=PC_DayStart(TimeCurrent());
 
    m_chart_scroll_orig=(bool)ChartGetInteger(0,CHART_MOUSE_SCROLL);
+   m_oneclick_orig=(bool)ChartGetInteger(0,CHART_SHOW_ONE_CLICK);
+   m_price_scale_orig=(bool)ChartGetInteger(0,CHART_SHOW_PRICE_SCALE);
+   m_date_scale_orig=(bool)ChartGetInteger(0,CHART_SHOW_DATE_SCALE);
    ChartSetInteger(0,CHART_EVENT_MOUSE_MOVE,true);
    ChartSetInteger(0,CHART_EVENT_MOUSE_WHEEL,true);
 
@@ -217,6 +227,7 @@ bool CPanel::Init(const SPanelSettings &settings)
    if(!m_r.Create(name,0,0,100,100,m_set.font)) return(false);
 
    m_data.SetDisciplineParams(m_set.max_trades_day,m_set.revenge_minutes,m_set.sl_factor);
+   m_data.SetDemoMode(m_set.demo_data);
    m_data.Reload();
    UpdateRange();
    ApplyGeometry();
@@ -231,13 +242,29 @@ void CPanel::Deinit()
   {
    if(m_scroll_disabled)
       ChartSetInteger(0,CHART_MOUSE_SCROLL,m_chart_scroll_orig);
+   ChartSetInteger(0,CHART_SHOW_ONE_CLICK,m_oneclick_orig);
+   ChartSetInteger(0,CHART_SHOW_PRICE_SCALE,m_price_scale_orig);
+   ChartSetInteger(0,CHART_SHOW_DATE_SCALE,m_date_scale_orig);
    m_r.Destroy();
    ChartRedraw(0);
   }
 
 //+------------------------------------------------------------------+
+//| Oculta el panel de un clic y, en pantalla completa, las escalas   |
+//+------------------------------------------------------------------+
+void CPanel::ApplyChartMode()
+  {
+   if(!m_set.clean_chart) return;
+   bool full=(m_maximized && !m_minimized);
+   ChartSetInteger(0,CHART_SHOW_ONE_CLICK,false);
+   ChartSetInteger(0,CHART_SHOW_PRICE_SCALE,(full ? false : m_price_scale_orig));
+   ChartSetInteger(0,CHART_SHOW_DATE_SCALE,(full ? false : m_date_scale_orig));
+  }
+
+//+------------------------------------------------------------------+
 void CPanel::ApplyGeometry()
   {
+   ApplyChartMode();
    int cw=(int)ChartGetInteger(0,CHART_WIDTH_IN_PIXELS);
    int ch=(int)ChartGetInteger(0,CHART_HEIGHT_IN_PIXELS);
    int x,y,w,h;
@@ -360,6 +387,7 @@ void CPanel::DrawHeader()
    m_r.Text(pad,h/2,"Estadísticas",PC_CLR_BLUE_LIGHT,FS(16),TA_LEFT|TA_VCENTER,true);
    int tw=m_r.TextWidth("Estadísticas",FS(16),true);
    string acc=StringFormat("Cuenta %I64d · %s",AccountInfoInteger(ACCOUNT_LOGIN),m_currency);
+   if(m_data.DemoMode()) acc="DATOS DE EJEMPLO · "+m_currency;
    m_r.Text(pad+tw+S(12),h/2+S(1),acc,PC_CLR_TEXT_MUTED,FS(10),TA_LEFT|TA_VCENTER,false);
 
    int bh=S(18), gap=S(4);
@@ -412,7 +440,7 @@ void CPanel::DrawCards(const int y,const int h)
    m_data.CollectInRange(ds,(datetime)((long)ds+86399),today);
    double today_closed=0;
    for(int i=0; i<ArraySize(today); i++) today_closed+=today[i].net;
-   double floating=AccountInfoDouble(ACCOUNT_PROFIT);
+   double floating=(m_data.DemoMode() ? 0.0 : AccountInfoDouble(ACCOUNT_PROFIT));
    double today_pnl=today_closed+floating;
    double limit=MathMax(0.0,m_set.daily_loss_limit);
    double used=(limit>0 ? MathMin(1.0,MathMax(0.0,-today_pnl)/limit) : 0.0);
@@ -424,8 +452,8 @@ void CPanel::DrawCards(const int y,const int h)
    x+=cw+gap;
 
    //--- 3. DD de Equity
-   double balance=AccountInfoDouble(ACCOUNT_BALANCE);
-   double equity=AccountInfoDouble(ACCOUNT_EQUITY);
+   double balance=(m_data.DemoMode() ? m_data.CurrentBalance() : AccountInfoDouble(ACCOUNT_BALANCE));
+   double equity=(m_data.DemoMode() ? balance-floating : AccountInfoDouble(ACCOUNT_EQUITY));
    double eq_dd=MathMax(0.0,balance-equity);
    double eq_pct=(balance>0 ? eq_dd/balance*100.0 : 0.0);
    string v3=PC_Money(eq_dd)+" "+m_currency;
