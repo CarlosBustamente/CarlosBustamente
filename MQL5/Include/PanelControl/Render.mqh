@@ -26,7 +26,7 @@ private:
    bool              m_created;
 
    void              ApplyFont(const int size,const bool bold);
-   uint              ARGB(const color clr) const { return(ColorToARGB(clr,255)); }
+   uint              ToARGB(const color clr) const { return(ColorToARGB(clr,255)); }
 
 public:
                      CRender();
@@ -161,21 +161,21 @@ void CRender::ApplyFont(const int size,const bool bold)
 //+------------------------------------------------------------------+
 void CRender::Clear(const color clr)
   {
-   m_canvas.Erase(ARGB(clr));
+   m_canvas.Erase(ToARGB(clr));
   }
 
 //+------------------------------------------------------------------+
 void CRender::Fill(const int x,const int y,const int w,const int h,const color clr)
   {
    if(w<=0 || h<=0) return;
-   m_canvas.FillRectangle(x,y,x+w-1,y+h-1,ARGB(clr));
+   m_canvas.FillRectangle(x,y,x+w-1,y+h-1,ToARGB(clr));
   }
 
 //+------------------------------------------------------------------+
 void CRender::Frame(const int x,const int y,const int w,const int h,const color clr)
   {
    if(w<=0 || h<=0) return;
-   m_canvas.Rectangle(x,y,x+w-1,y+h-1,ARGB(clr));
+   m_canvas.Rectangle(x,y,x+w-1,y+h-1,ToARGB(clr));
   }
 
 //+------------------------------------------------------------------+
@@ -188,25 +188,25 @@ void CRender::Box(const int x,const int y,const int w,const int h,const color fi
 //+------------------------------------------------------------------+
 void CRender::HLine(const int x1,const int x2,const int y,const color clr)
   {
-   m_canvas.LineHorizontal(x1,x2,y,ARGB(clr));
+   m_canvas.LineHorizontal(x1,x2,y,ToARGB(clr));
   }
 
 //+------------------------------------------------------------------+
 void CRender::VLine(const int x,const int y1,const int y2,const color clr)
   {
-   m_canvas.LineVertical(x,y1,y2,ARGB(clr));
+   m_canvas.LineVertical(x,y1,y2,ToARGB(clr));
   }
 
 //+------------------------------------------------------------------+
 void CRender::Line(const int x1,const int y1,const int x2,const int y2,const color clr)
   {
-   m_canvas.LineAA(x1,y1,x2,y2,ARGB(clr));
+   m_canvas.LineAA(x1,y1,x2,y2,ToARGB(clr));
   }
 
 //+------------------------------------------------------------------+
 void CRender::DottedHLine(const int x1,const int x2,const int y,const color clr,const int step)
   {
-   uint c=ARGB(clr);
+   uint c=ToARGB(clr);
    int a=MathMin(x1,x2), b=MathMax(x1,x2);
    for(int x=a; x<=b; x+=MathMax(1,step))
       m_canvas.PixelSet(x,y,c);
@@ -215,7 +215,7 @@ void CRender::DottedHLine(const int x1,const int x2,const int y,const color clr,
 //+------------------------------------------------------------------+
 void CRender::DottedVLine(const int x,const int y1,const int y2,const color clr,const int step)
   {
-   uint c=ARGB(clr);
+   uint c=ToARGB(clr);
    int a=MathMin(y1,y2), b=MathMax(y1,y2);
    for(int y=a; y<=b; y+=MathMax(1,step))
       m_canvas.PixelSet(x,y,c);
@@ -224,13 +224,13 @@ void CRender::DottedVLine(const int x,const int y1,const int y2,const color clr,
 //+------------------------------------------------------------------+
 void CRender::Pixel(const int x,const int y,const color clr)
   {
-   m_canvas.PixelSet(x,y,ARGB(clr));
+   m_canvas.PixelSet(x,y,ToARGB(clr));
   }
 
 //+------------------------------------------------------------------+
 void CRender::Circle(const int cx,const int cy,const int r,const color clr)
   {
-   m_canvas.FillCircle(cx,cy,r,ARGB(clr));
+   m_canvas.FillCircle(cx,cy,r,ToARGB(clr));
   }
 
 //+------------------------------------------------------------------+
@@ -241,7 +241,7 @@ void CRender::Ring(const int cx,const int cy,const int r_out,const int r_in,doub
   {
    if(a_to<a_from) { double t=a_to; a_to=a_from; a_from=t; }
    if(a_to-a_from<0.01) return;
-   uint c=ARGB(clr);
+   uint c=ToARGB(clr);
    int xs[4], ys[4];
    double step=2.0;
    for(double a=a_from; a<a_to; a+=step)
@@ -260,14 +260,14 @@ void CRender::Ring(const int cx,const int cy,const int r_out,const int r_in,doub
 void CRender::TriangleLeft(const int cx,const int cy,const int size,const color clr)
   {
    int s=MathMax(2,size/2);
-   m_canvas.FillTriangle(cx-s,cy,cx+s,cy-s,cx+s,cy+s,ARGB(clr));
+   m_canvas.FillTriangle(cx-s,cy,cx+s,cy-s,cx+s,cy+s,ToARGB(clr));
   }
 
 //+------------------------------------------------------------------+
 void CRender::TriangleRight(const int cx,const int cy,const int size,const color clr)
   {
    int s=MathMax(2,size/2);
-   m_canvas.FillTriangle(cx+s,cy,cx-s,cy-s,cx-s,cy+s,ARGB(clr));
+   m_canvas.FillTriangle(cx+s,cy,cx-s,cy-s,cx-s,cy+s,ToARGB(clr));
   }
 
 //+------------------------------------------------------------------+
@@ -294,7 +294,7 @@ void CRender::Text(const int x,const int y,const string txt,const color clr,cons
   {
    if(txt=="") return;
    ApplyFont(size,bold);
-   m_canvas.TextOut(x,y,txt,ARGB(clr),align);
+   m_canvas.TextOut(x,y,txt,ToARGB(clr),align);
   }
 
 //+------------------------------------------------------------------+
