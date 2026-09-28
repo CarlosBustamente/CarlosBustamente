@@ -1,1 +1,137 @@
-# CarlosBustamente
+# Panel de Control para MT5 — Herramienta de Análisis de Trading
+
+Expert Advisor para **MetaTrader 5** que muestra, sobre el propio gráfico, un panel de
+estadísticas en tiempo real basado en las **posiciones cerradas** de la cuenta. No abre ni
+cierra operaciones: es exclusivamente una herramienta de análisis.
+
+Interfaz completa en español, diseño oscuro fiel a las capturas de referencia y adaptación
+automática al tamaño del gráfico.
+
+```
+MQL5/
+├── Experts/PanelControl/PanelControlMT5.mq5     ← Expert Advisor (punto de entrada)
+└── Include/PanelControl/
+    ├── PanelControl.mqh                          ← inclusión única de la librería
+    ├── Config.mqh                                ← paleta de colores, enumeraciones, textos
+    ├── Render.mqh                                ← capa de dibujo sobre CCanvas
+    ├── TradeData.mqh                             ← historial por posición, filtros, estadísticas
+    ├── Panel.mqh                                 ← núcleo: layout, cabecera, tarjetas, filtros, popups
+    ├── ViewChart.mqh                             ← pestaña Gráfico
+    ├── ViewTransactions.mqh                      ← pestaña Transacciones
+    ├── ViewCalendar.mqh                          ← pestaña Calendario
+    ├── ViewHourly.mqh                            ← pestaña Por Hora (mapa de calor)
+    └── ViewArena.mqh                             ← pestaña Estadísticas Arena
+```
+
+## Instalación
+
+1. Abre MetaTrader 5 → `Archivo` → `Abrir carpeta de datos`.
+2. Copia la carpeta `MQL5` de este repositorio sobre la carpeta `MQL5` del terminal
+   (se fusionarán `Experts` e `Include`).
+3. En MetaEditor abre `MQL5/Experts/PanelControl/PanelControlMT5.mq5` y pulsa **Compilar** (F7).
+4. En el terminal, arrastra `PanelControlMT5` desde el Navegador (`Asesores Expertos`) a
+   cualquier gráfico. No requiere permiso de trading automático.
+
+> Los archivos están guardados en UTF-8 con BOM para que MetaEditor muestre correctamente
+> los acentos y la letra ñ.
+
+## Características
+
+### Cabecera y tarjetas superiores
+
+| Tarjeta | Contenido |
+|---|---|
+| **P&L Total** | Beneficio neto del rango filtrado (`G:` ganancia bruta, `P:` pérdida bruta). |
+| **Límite Diario Prop** | P&L del día (cerrado + flotante), restante hasta el límite diario y barra de consumo. |
+| **DD de Equity** | Diferencia balance − equity actual y su porcentaje. |
+| **Operaciones / WR** | Número de operaciones, tasa de acierto y desglose ganadas/perdidas. |
+| **DD Máximo Histórico** | Caída desde el máximo histórico del balance y porcentaje consumido del DD permitido. |
+| **Swap y Comisión** | Totales de swap y comisión (+ fees) del rango. |
+
+Botones de rango temporal: **Hoy · Semana · Mes · Todo · Personalizado** (abre un selector de
+fecha de inicio y fin). A la derecha, botones para **minimizar** (deja solo la barra con un
+resumen) y **maximizar** (alternar entre pantalla completa y modo ventana).
+
+### Panel lateral de filtros
+
+- **SF** — Filtros de Símbolo: casilla `TODOS` + una casilla por cada símbolo operado, con su
+  cuadro de color.
+- **MN** — Filtros de Mágico: una casilla por cada número mágico (0 = operaciones manuales).
+- **TP** — Filtro por Tipo: Compra / Venta.
+
+La lista se desplaza con la rueda del ratón cuando hay muchos elementos.
+
+### Pestañas
+
+1. **Gráfico** — Evolución del P&L neto acumulado con relleno verde/rojo, rejilla, ejes y
+   tooltip al pasar el ratón (fecha, P&L acumulado y operación).
+2. **Transacciones** — Tabla paginada (símbolo, tipo, mágico, volumen, apertura, cierre,
+   duración, beneficio neto). Navegación con botones `<` `>` o rueda del ratón.
+3. **Calendario** — Desglose mensual: celdas por día con P&L, porcentaje sobre el balance
+   inicial del día, drawdown intradía (`-x% DD`) y línea `T G P WR`. Columna de **Totales**
+   semanales con porcentaje, barra resumen del mes (operaciones, ganadas, perdidas, beneficio,
+   porcentaje) y navegación entre meses. Clic en un día → popup con sus operaciones.
+   *El calendario ignora el rango temporal de la cabecera (navega por meses), pero respeta los
+   filtros de símbolo, mágico y tipo.*
+4. **Por Hora** — Mapa de calor 7 × 24 (Lun–Dom × 00–23) con totales por fila y columna.
+   Botones **Compra/Venta · Compra · Venta** y alternador **Hora CIERRE / Hora APERTURA**.
+   Clic en una celda → popup con total de operaciones, distribución compra/venta, ratio
+   ganancia/pérdida por dirección, P&L de compras, ventas y total, y lista de operaciones.
+5. **Estadísticas Arena** — Vista **Resumen**: Ratio de Sharpe, Factor de Beneficio y
+   Drawdown Máximo con barras segmentadas y valoración; medidores de **Disciplina** y
+   **Eficiencia** (0–100); **Tasa de Errores**; análisis textual; **Alertas de Rendimiento**
+   y **Aspectos Positivos**. Vista **Avanzado**: tabla con más de 30 métricas (expectativa,
+   payoff, rachas, factor de recuperación, Kelly, mejor/peor día, compras vs ventas, etc.).
+
+### Actualización en tiempo real
+
+- `OnTradeTransaction` / `OnTrade` detectan nuevos deals y recargan el historial con un breve
+  retardo (para que el deal ya esté disponible en el historial).
+- Un temporizador refresca las tarjetas dependientes de equity (DD de Equity, Límite Diario)
+  solo cuando el valor cambia.
+- `CHARTEVENT_CHART_CHANGE` redimensiona el panel al cambiar el tamaño del gráfico.
+
+## Parámetros de entrada
+
+| Grupo | Parámetro | Descripción |
+|---|---|---|
+| Apariencia | `InpFontName` | Fuente (por defecto `Arial`). |
+| | `InpUIScale` | Escala de toda la interfaz (1.0 = 100%, útil en pantallas HiDPI). |
+| | `InpStartMaximized` | Iniciar ocupando todo el gráfico. |
+| | `InpPanelX/Y/Width/Height` | Geometría en modo ventana. |
+| Riesgo | `InpDailyLossLimit` | Límite de pérdida diaria en dinero (0 = sin límite). |
+| | `InpMaxDrawdownPct` | DD máximo permitido desde el máximo histórico (%). |
+| Disciplina | `InpMaxTradesPerDay` | Umbral de sobre-trading (operaciones/día). |
+| | `InpRevengeMinutes` | Minutos tras una pérdida para marcar revenge trading. |
+| | `InpSLViolationFactor` | Factor sobre la pérdida mediana para marcar violación de stop. |
+| Actualización | `InpRefreshMs` | Intervalo del temporizador (ms). |
+
+## Definición de las métricas
+
+- **Registro por posición**: todos los deals de una misma `POSITION_ID` se agregan en un único
+  registro (apertura = primer deal de entrada, cierre = último deal de salida, neto = beneficio +
+  swap + comisión + fee). Solo se incluyen posiciones totalmente cerradas.
+- **Curva de balance**: se reconstruye a partir de todos los deals (incluidos depósitos y
+  retiros) y se alinea con el balance actual de la cuenta, de forma que los porcentajes del
+  calendario usan el balance real al inicio de cada día / semana / mes.
+- **Ratio de Sharpe** (por operación): media del P&L neto / desviación típica del P&L neto.
+- **Factor de Beneficio**: beneficio bruto / |pérdida bruta|.
+- **Drawdown Máximo**: mayor caída pico-valle de la curva de balance del rango, en % del pico.
+- **Violación de stop**: pérdida mayor que `InpSLViolationFactor` × mediana de las pérdidas.
+- **Revenge trading**: operación abierta menos de `InpRevengeMinutes` después de cerrar una
+  pérdida.
+- **Cambio de riesgo**: las tres últimas pérdidas duplican, en media, a las anteriores.
+- **Puntuación de Disciplina** (0–100): 100 − penalizaciones por % de días con sobre-trading,
+  % de violaciones de stop, % de revenge trades y cambio de riesgo.
+- **Eficiencia de Operación** (0–100): 0.4 × tasa de acierto + 0.4 × min(PF, 3)/3 × 100 +
+  0.2 × (100 − tasa de errores).
+- **Tasa de Errores**: % de operaciones marcadas como violación de stop o revenge trading.
+
+## Notas técnicas
+
+- Todo el panel se dibuja en un único `OBJ_BITMAP_LABEL` mediante `CCanvas`, lo que permite
+  control total de colores, bordes y tipografía, y un único objeto en el gráfico.
+- La interacción se resuelve con un mapa de zonas de clic reconstruido en cada dibujo; el
+  desplazamiento del gráfico se desactiva mientras el cursor está sobre el panel y se
+  restaura al salir.
+- `Esc` cierra cualquier ventana emergente; clic fuera de ella también la cierra.
