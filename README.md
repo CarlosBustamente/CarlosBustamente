@@ -95,8 +95,10 @@ La lista se desplaza con la rueda del ratón cuando hay muchos elementos.
    - *DD Máximo*: peor saldo flotante estimado durante la vida de la matriz, recorriendo las
      velas del símbolo (como el P&L de la canasta es lineal en el precio, se evalúa en el
      mínimo y el máximo de cada vela, sumando lo ya realizado y las comisiones). Si no hay
-     velas disponibles se muestra con `~` la suma de las pérdidas realizadas. El resultado se
-     guarda en caché por matriz.
+     velas disponibles se muestra con `~` la suma de las pérdidas realizadas. El cálculo se hace
+     por lotes en segundo plano (primero las matrices visibles) para que el panel aparezca al
+     instante aunque el historial sea muy grande; el resultado se guarda en caché por matriz.
+     Puede desactivarse con `InpMatrixDDRates=false` (se muestra siempre la aproximación `~`).
    - *Refuerzo*: `Sí (n)` cuando `n` posiciones llevan en su comentario el texto de
      `InpMatrixReinforceTag` (por defecto `REF`, como las órdenes `REF_BUY_n` / `REF_SELL_n`).
    - Solo se listan canastas con al menos `InpMatrixMinOps` posiciones (por defecto 2).
@@ -130,6 +132,7 @@ La lista se desplaza con la rueda del ratón cuando hay muchos elementos.
 | | `InpSLViolationFactor` | Factor sobre la pérdida mediana para marcar violación de stop. |
 | Control de matrices | `InpMatrixReinforceTag` | Texto que, presente en el comentario de una posición, la marca como refuerzo (`REF`). |
 | | `InpMatrixMinOps` | Mínimo de posiciones solapadas para considerar una matriz (2). |
+| | `InpMatrixDDRates` | Estimar el DD máximo de cada matriz con las velas del símbolo (true). |
 | Actualización | `InpRefreshMs` | Intervalo del temporizador (ms). |
 | Demostración | `InpDemoData` | Genera un historial sintético de ~40 días (7 símbolos, 3 mágicos, más matrices de rejilla en `US30`) para probar el panel en cuentas sin operaciones. La cabecera muestra `DATOS DE EJEMPLO`. |
 

@@ -825,6 +825,7 @@ struct PControl_Matrix
    double            gross_loss;
    double            max_dd;        // drawdown máximo estimado (positivo, en dinero)
    bool              dd_from_rates; // true = calculado con velas; false = aproximación por pérdidas realizadas
+   bool              dd_pending;    // true = el cálculo con velas aún no se ha intentado
    long              first_pid;     // position_id de la primera posición (clave de caché)
   };
 
@@ -832,7 +833,7 @@ void PControl_ResetMatrix(PControl_Matrix &m)
   {
    m.symbol=""; m.magic=0; m.seq=0; m.open_time=0; m.close_time=0;
    m.buys=0; m.sells=0; m.reinforcements=0; m.volume=0; m.net=0; m.gross_win=0; m.gross_loss=0;
-   m.max_dd=0; m.dd_from_rates=false; m.first_pid=0;
+   m.max_dd=0; m.dd_from_rates=false; m.dd_pending=false; m.first_pid=0;
   }
 
 //+------------------------------------------------------------------+
@@ -1826,6 +1827,7 @@ struct PControl_Settings
    bool              clean_chart;
    string            mx_tag;        // texto en el comentario que identifica un refuerzo
    int               mx_min_ops;    // mínimo de posiciones para considerar una matriz
+   bool              mx_dd_rates;   // estimar el DD máximo de cada matriz con las velas del símbolo
   };
 
 //+------------------------------------------------------------------+
@@ -1896,12 +1898,19 @@ private:
    PControl_Matrix           m_mx[];
    int               m_mx_of[];        // índice de matriz de cada registro (-1 = ninguna)
    int               m_mx_order[];     // matrices ordenadas por apertura descendente
+   int               m_mx_start[];     // inicio de los miembros de cada matriz en m_mx_items
+   int               m_mx_items[];     // índices de registros agrupados por matriz
+   bool              m_mx_dirty;       // hay que reconstruir las matrices (datos o filtros cambiaron)
+   int               m_mx_rows;        // filas visibles por página (calculado al dibujar)
+   int               m_dd_pending;     // matrices cuyo DD por velas aún no se ha calculado
    long              m_dd_keys[];
    double            m_dd_vals[];
    bool              m_dd_ok[];
    uint              m_dd_stamp[];
+   int               m_dd_tries[];
    void              BuildMatrices();
-   double            MatrixDrawdown(const int mi,bool &from_rates);
+   bool              ComputeMatrixDD(const int mi);
+   bool              ComputePendingDD(const int max_ms);
    bool              CachedDD(const long key,double &val,bool &ok) const;
    void              StoreDD(const long key,const double val,const bool ok);
 
@@ -1977,7 +1986,7 @@ public:
 PControl_Panel::PControl_Panel() : m_currency("USD"),m_range(PControl_RANGE_ALL),m_tab(PControl_TAB_CHART),m_ftab(PControl_FTAB_SYMBOL),
                    m_minimized(false),m_maximized(true),m_cal_year(2025),m_cal_month(1),
                    m_hour_mode(PControl_HOUR_BOTH),m_hour_by_close(true),m_arena_advanced(false),
-                   m_tx_page(0),m_tx_pages(1),m_mx_page(0),m_mx_pages(1),m_filter_scroll(0),m_custom_from(0),m_custom_to(0),
+                   m_tx_page(0),m_tx_pages(1),m_mx_page(0),m_mx_pages(1),m_mx_dirty(true),m_mx_rows(1),m_dd_pending(0),m_filter_scroll(0),m_custom_from(0),m_custom_to(0),
                    m_popup(PControl_POPUP_NONE),m_popup_p1(0),m_popup_p2(0),m_dp_view(0),m_dp_stage(0),
                    m_mouse_x(-1),m_mouse_y(-1),m_mouse_inside(false),m_left_down(false),
                    m_chart_scroll_orig(true),m_scroll_disabled(false),m_oneclick_orig(false),
@@ -2032,6 +2041,8 @@ bool PControl_Panel::Init(const PControl_Settings &settings)
    m_last_equity=AccountInfoDouble(ACCOUNT_EQUITY);
    m_last_balance=AccountInfoDouble(ACCOUNT_BALANCE);
    Draw();
+   PrintFormat("PanelControl: iniciado (%d posiciones en el historial, %d matrices, %s)",
+               m_data.TotalCount(),ArraySize(m_mx_order),(m_set.demo_data ? "datos de ejemplo" : "cuenta real"));
    return(true);
   }
 
@@ -2105,7 +2116,7 @@ void PControl_Panel::UpdateRange()
      }
    m_data.SetRange(from,to);
    m_data.ApplyFilter();
-   m_tx_page=0; m_mx_page=0;
+   m_tx_page=0; m_mx_page=0; m_mx_dirty=true;
   }
 
 //+------------------------------------------------------------------+
@@ -2113,7 +2124,11 @@ void PControl_Panel::RefreshData()
   {
    m_data.GetFiltered(m_recs);
    m_data.ComputeStats(m_recs,m_stats);
-   BuildMatrices();
+   if(m_mx_dirty)
+     {
+      BuildMatrices();
+      m_mx_dirty=false;
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -2711,14 +2726,14 @@ void PControl_Panel::Dispatch(const int action,const long p1,const long p2)
          else if(m_ftab==PControl_FTAB_MAGIC) m_data.SetAllMagics(!m_data.AllMagicsOn());
          else m_data.SetAllTypes(!(m_data.BuyOn() && m_data.SellOn()));
          m_data.ApplyFilter();
-         m_tx_page=0; m_mx_page=0;
+         m_tx_page=0; m_mx_page=0; m_mx_dirty=true;
          break;
       case PControl_ACT_FILTER_ITEM:
          if(m_ftab==PControl_FTAB_SYMBOL) m_data.ToggleSymbol((int)p1);
          else if(m_ftab==PControl_FTAB_MAGIC) m_data.ToggleMagic((int)p1);
          else { if(p1==0) m_data.ToggleBuy(); else m_data.ToggleSell(); }
          m_data.ApplyFilter();
-         m_tx_page=0; m_mx_page=0;
+         m_tx_page=0; m_mx_page=0; m_mx_dirty=true;
          break;
       case PControl_ACT_CAL_PREV:
          m_cal_month--;
@@ -2834,10 +2849,19 @@ void PControl_Panel::OnTimer()
       m_reload_pending=false;
       m_data.Reload();
       m_data.ApplyFilter();
+      m_mx_dirty=true;
       m_last_equity=AccountInfoDouble(ACCOUNT_EQUITY);
       m_last_balance=AccountInfoDouble(ACCOUNT_BALANCE);
       Draw();
       return;
+     }
+   if(m_tab==PControl_TAB_MATRICES && m_dd_pending>0)
+     {
+      if(ComputePendingDD(120))
+        {
+         Draw();
+         return;
+        }
      }
    if(m_popup!=PControl_POPUP_NONE || m_hover_plot) return;
    double eq=AccountInfoDouble(ACCOUNT_EQUITY);
@@ -3598,6 +3622,7 @@ void PControl_Panel::BuildMatrices()
    //--- última matriz de cada clave símbolo|mágico
    string open_keys[];
    int    open_mx[];
+   int    mx_key[];
    int    nk=0, count=0;
    for(int s=0; s<n; s++)
      {
@@ -3611,6 +3636,7 @@ void PControl_Panel::BuildMatrices()
         {
          mi=count;
          ArrayResize(m_mx,count+1);
+         ArrayResize(mx_key,count+1);
          PControl_ResetMatrix(m_mx[mi]);
          m_mx[mi].symbol    =m_recs[i].symbol;
          m_mx[mi].magic     =m_recs[i].magic;
@@ -3627,6 +3653,7 @@ void PControl_Panel::BuildMatrices()
             nk++;
            }
          open_mx[ki]=mi;
+         mx_key[mi]=ki;
         }
       if(m_recs[i].type==0) m_mx[mi].buys++; else m_mx[mi].sells++;
       m_mx[mi].volume+=m_recs[i].vol_in;
@@ -3642,36 +3669,58 @@ void PControl_Panel::BuildMatrices()
       m_mx_of[i]=mi;
      }
 
-   //--- descartar canastas pequeñas, numerar por día y ordenar (más recientes primero)
+   //--- índice de miembros por matriz (orden cronológico dentro de cada matriz)
+   ArrayResize(m_mx_start,count+1);
+   ArrayResize(m_mx_items,n);
+   for(int mi=0; mi<=count; mi++) m_mx_start[mi]=0;
+   for(int i=0; i<n; i++) m_mx_start[m_mx_of[i]+1]++;
+   for(int mi=1; mi<=count; mi++) m_mx_start[mi]+=m_mx_start[mi-1];
+     {
+      int fill[];
+      ArrayResize(fill,count);
+      for(int mi=0; mi<count; mi++) fill[mi]=m_mx_start[mi];
+      for(int s2=0; s2<n; s2++)
+        {
+         int i=(int)(keys[s2]%1000000);
+         int mi=m_mx_of[i];
+         if(mi<0) continue;
+         m_mx_items[fill[mi]++]=i;
+        }
+     }
+
+   //--- descartar canastas pequeñas, numerar por día (por símbolo+mágico) y ordenar (más recientes primero)
    int min_ops=MathMax(1,m_set.mx_min_ops);
-   string day_keys[];
-   int    day_cnt[];
-   int    nd=0;
+   datetime last_day[];
+   int      day_cnt[];
+   ArrayResize(last_day,nk);
+   ArrayResize(day_cnt,nk);
+   for(int k=0; k<nk; k++) { last_day[k]=0; day_cnt[k]=0; }
+   m_dd_pending=0;
+   bool use_rates=(m_set.mx_dd_rates && !m_data.DemoMode());
    for(int mi=0; mi<count; mi++)
      {
       if(m_mx[mi].buys+m_mx[mi].sells<min_ops)
         {
          m_mx[mi].seq=-1;
-         for(int i=0; i<n; i++) if(m_mx_of[i]==mi) m_mx_of[i]=-1;
+         for(int j=m_mx_start[mi]; j<m_mx_start[mi+1]; j++) m_mx_of[m_mx_items[j]]=-1;
          continue;
         }
-      string dk=m_mx[mi].symbol+"|"+IntegerToString(m_mx[mi].magic)+"|"+PControl_DateStr(PControl_DayStart(m_mx[mi].open_time));
-      int di=-1;
-      for(int k=0; k<nd; k++) if(day_keys[k]==dk) { di=k; break; }
-      if(di<0)
+      int ki=mx_key[mi];
+      datetime day=PControl_DayStart(m_mx[mi].open_time);
+      if(day!=last_day[ki]) { last_day[ki]=day; day_cnt[ki]=0; }
+      day_cnt[ki]++;
+      m_mx[mi].seq=day_cnt[ki];
+      //--- DD: aproximación inmediata; el cálculo con velas se hace por lotes en el temporizador
+      m_mx[mi].max_dd=-m_mx[mi].gross_loss;
+      m_mx[mi].dd_from_rates=false;
+      m_mx[mi].dd_pending=false;
+      if(use_rates)
         {
-         di=nd;
-         ArrayResize(day_keys,nd+1);
-         ArrayResize(day_cnt,nd+1);
-         day_keys[di]=dk;
-         day_cnt[di]=0;
-         nd++;
+         long key=m_mx[mi].first_pid*1000003+(long)(m_mx[mi].buys*1000+m_mx[mi].sells);
+         double val=0.0; bool ok=false;
+         if(CachedDD(key,val,ok)) { m_mx[mi].max_dd=val; m_mx[mi].dd_from_rates=ok; }
+         else { m_mx[mi].dd_pending=true; m_dd_pending++; }
         }
-      day_cnt[di]++;
-      m_mx[mi].seq=day_cnt[di];
-      bool from_rates=false;
-      m_mx[mi].max_dd=MatrixDrawdown(mi,from_rates);
-      m_mx[mi].dd_from_rates=from_rates;
      }
    for(int mi=count-1; mi>=0; mi--)
      {
@@ -3690,8 +3739,8 @@ bool PControl_Panel::CachedDD(const long key,double &val,bool &ok) const
    for(int i=0; i<ArraySize(m_dd_keys); i++)
       if(m_dd_keys[i]==key)
         {
-         // los cálculos sin velas se reintentan cada 30 s (la historia puede estar descargándose)
-         if(!m_dd_ok[i] && GetTickCount()-m_dd_stamp[i]>30000) return(false);
+         // los cálculos sin velas se reintentan (máx. 3 veces) cada 30 s: la historia puede estar descargándose
+         if(!m_dd_ok[i] && m_dd_tries[i]<3 && GetTickCount()-m_dd_stamp[i]>30000) return(false);
          val=m_dd_vals[i];
          ok=m_dd_ok[i];
          return(true);
@@ -3711,80 +3760,108 @@ void PControl_Panel::StoreDD(const long key,const double val,const bool ok)
       ArrayResize(m_dd_vals,n+1);
       ArrayResize(m_dd_ok,n+1);
       ArrayResize(m_dd_stamp,n+1);
+      ArrayResize(m_dd_tries,n+1);
       m_dd_keys[idx]=key;
+      m_dd_tries[idx]=0;
      }
    m_dd_vals[idx]=val;
    m_dd_ok[idx]=ok;
    m_dd_stamp[idx]=GetTickCount();
+   m_dd_tries[idx]++;
   }
 
 //+------------------------------------------------------------------+
 //| Drawdown máximo estimado de una matriz: peor saldo flotante        |
 //| (realizado + flotante) recorriendo las velas del símbolo. Como el  |
 //| P&L de la canasta es lineal en el precio, basta evaluar el mínimo  |
-//| y el máximo de cada vela. Sin velas: suma de pérdidas realizadas.  |
+//| y el máximo de cada vela. Devuelve true si el valor cambió.        |
 //+------------------------------------------------------------------+
-double PControl_Panel::MatrixDrawdown(const int mi,bool &from_rates)
+bool PControl_Panel::ComputeMatrixDD(const int mi)
   {
-   PControl_Matrix mx=m_mx[mi];
-   long key=mx.first_pid*1000003+(long)(mx.buys*1000+mx.sells);
-   double val=0.0;
+   long key=m_mx[mi].first_pid*1000003+(long)(m_mx[mi].buys*1000+m_mx[mi].sells);
+   double val=-m_mx[mi].gross_loss;          // aproximación por defecto
    bool ok=false;
-   if(CachedDD(key,val,ok)) { from_rates=ok; return(val); }
 
-   val=-mx.gross_loss;                       // aproximación por defecto
-   ok=false;
-   if(!m_data.DemoMode())
+   long dur=(long)m_mx[mi].close_time-(long)m_mx[mi].open_time;
+   ENUM_TIMEFRAMES tf=PERIOD_M1;
+   long per=60;
+   if(dur>1500*60)    { tf=PERIOD_M5;  per=300;   }
+   if(dur>1500*300)   { tf=PERIOD_M15; per=900;   }
+   if(dur>1500*900)   { tf=PERIOD_M30; per=1800;  }
+   if(dur>1500*1800)  { tf=PERIOD_H1;  per=3600;  }
+   if(dur>1500*3600)  { tf=PERIOD_H4;  per=14400; }
+   if(dur>1500*14400) { tf=PERIOD_D1;  per=86400; }
+   double tv=SymbolInfoDouble(m_mx[mi].symbol,SYMBOL_TRADE_TICK_VALUE);
+   double ts=SymbolInfoDouble(m_mx[mi].symbol,SYMBOL_TRADE_TICK_SIZE);
+   MqlRates rates[];
+   int nb=0;
+   if(tv>0.0 && ts>0.0)
      {
-      long dur=(long)mx.close_time-(long)mx.open_time;
-      ENUM_TIMEFRAMES tf=PERIOD_M1;
-      long per=60;
-      if(dur>1500*60)    { tf=PERIOD_M5;  per=300;   }
-      if(dur>1500*300)   { tf=PERIOD_M15; per=900;   }
-      if(dur>1500*900)   { tf=PERIOD_M30; per=1800;  }
-      if(dur>1500*1800)  { tf=PERIOD_H1;  per=3600;  }
-      if(dur>1500*3600)  { tf=PERIOD_H4;  per=14400; }
-      if(dur>1500*14400) { tf=PERIOD_D1;  per=86400; }
-      double tv=SymbolInfoDouble(mx.symbol,SYMBOL_TRADE_TICK_VALUE);
-      double ts=SymbolInfoDouble(mx.symbol,SYMBOL_TRADE_TICK_SIZE);
-      MqlRates rates[];
-      int nb=0;
-      if(tv>0.0 && ts>0.0)
-         nb=CopyRates(mx.symbol,tf,(datetime)((long)mx.open_time-per),(datetime)((long)mx.close_time+per),rates);
-      if(nb>0)
+      ResetLastError();
+      nb=CopyRates(m_mx[mi].symbol,tf,(datetime)((long)m_mx[mi].open_time-per),(datetime)((long)m_mx[mi].close_time+per),rates);
+     }
+   if(nb>0)
+     {
+      double worst=0.0;
+      for(int b=0; b<nb; b++)
         {
-         int members[];
-         int nm=0;
-         for(int i=0; i<ArraySize(m_recs); i++)
-            if(m_mx_of[i]==mi) { ArrayResize(members,nm+1); members[nm++]=i; }
-         double worst=0.0;
-         for(int b=0; b<nb; b++)
+         datetime bs=rates[b].time;
+         datetime be=(datetime)((long)bs+per);
+         if(be<=m_mx[mi].open_time || bs>=m_mx[mi].close_time) continue;
+         double realized=0.0, at_low=0.0, at_high=0.0;
+         for(int j=m_mx_start[mi]; j<m_mx_start[mi+1]; j++)
            {
-            datetime bs=rates[b].time;
-            datetime be=(datetime)((long)bs+per);
-            if(be<=mx.open_time || bs>=mx.close_time) continue;
-            double realized=0.0, at_low=0.0, at_high=0.0;
-            for(int k=0; k<nm; k++)
-              {
-               int ri=members[k];
-               if(m_recs[ri].close_time<bs) { realized+=m_recs[ri].net; continue; }
-               if(m_recs[ri].open_time>=be) continue;
-               double sign=(m_recs[ri].type==0 ? 1.0 : -1.0);
-               double mult=m_recs[ri].vol_in*tv/ts;
-               at_low +=sign*(rates[b].low -m_recs[ri].open_price)*mult;
-               at_high+=sign*(rates[b].high-m_recs[ri].open_price)*mult;
-               realized+=m_recs[ri].commission;
-              }
-            double eq=realized+MathMin(at_low,at_high);
-            if(eq<worst) worst=eq;
+            int ri=m_mx_items[j];
+            if(m_recs[ri].close_time<bs) { realized+=m_recs[ri].net; continue; }
+            if(m_recs[ri].open_time>=be) continue;
+            double sign=(m_recs[ri].type==0 ? 1.0 : -1.0);
+            double mult=m_recs[ri].vol_in*tv/ts;
+            at_low +=sign*(rates[b].low -m_recs[ri].open_price)*mult;
+            at_high+=sign*(rates[b].high-m_recs[ri].open_price)*mult;
+            realized+=m_recs[ri].commission;
            }
-         val=-worst;
-         ok=true;
+         double eq=realized+MathMin(at_low,at_high);
+         if(eq<worst) worst=eq;
         }
+      val=-worst;
+      ok=true;
      }
    StoreDD(key,val,ok);
-   from_rates=ok;
-   return(val);
+   bool changed=(MathAbs(val-m_mx[mi].max_dd)>0.005 || ok!=m_mx[mi].dd_from_rates);
+   m_mx[mi].max_dd=val;
+   m_mx[mi].dd_from_rates=ok;
+   m_mx[mi].dd_pending=false;
+   if(m_dd_pending>0) m_dd_pending--;
+   return(changed);
+  }
+
+//+------------------------------------------------------------------+
+//| Calcula por lotes (con límite de tiempo) el DD de las matrices     |
+//| pendientes, empezando por las visibles en la página actual.        |
+//| Devuelve true si algún valor mostrado cambió.                      |
+//+------------------------------------------------------------------+
+bool PControl_Panel::ComputePendingDD(const int max_ms)
+  {
+   if(m_dd_pending<=0 || m_mx_dirty) return(false);
+   ulong t0=GetMicrosecondCount();
+   bool changed=false;
+   int n=ArraySize(m_mx_order);
+   int rows=MathMax(1,m_mx_rows);
+   int first=m_mx_page*rows;
+   //--- primero la página visible, después el resto (de más reciente a más antigua)
+   for(int pass=0; pass<2; pass++)
+     {
+      int from=(pass==0 ? first : 0);
+      int to  =(pass==0 ? MathMin(n,first+rows) : n);
+      for(int k=from; k<to; k++)
+        {
+         int mi=m_mx_order[k];
+         if(!m_mx[mi].dd_pending) continue;
+         if(ComputeMatrixDD(mi)) changed=true;
+         if((GetMicrosecondCount()-t0)/1000>(ulong)max_ms) return(changed);
+        }
+     }
+   return(changed);
   }
 
 //+------------------------------------------------------------------+
@@ -3807,6 +3884,7 @@ void PControl_Panel::DrawMatricesView(const PControl_Rect &rc)
    int footer_h=S(26);
    int table_h=rc.h-S(32)-footer_h-S(6);
    int rows=MathMax(1,(table_h-rowh)/rowh);
+   m_mx_rows=rows;
    m_mx_pages=MathMax(1,(n+rows-1)/rows);
    if(m_mx_page>m_mx_pages-1) m_mx_page=m_mx_pages-1;
    if(m_mx_page<0) m_mx_page=0;
@@ -3962,7 +4040,7 @@ void PControl_Panel::DrawMatrixPopup()
    ty+=lh;
    string a8="DD Máximo: ";
    m_r.Text(lx,ty,a8,PControl_CLR_TEXT_DIM,FS(10),TA_LEFT|TA_TOP,false);
-   m_r.Text(lx+m_r.TextWidth(a8,FS(10)),ty,PControl_Money(mx.max_dd)+" "+m_currency+(mx.dd_from_rates ? "  (estimado con velas)" : "  (~ pérdidas realizadas)"),PControl_CLR_RED,FS(10),TA_LEFT|TA_TOP,true);
+   m_r.Text(lx+m_r.TextWidth(a8,FS(10)),ty,PControl_Money(mx.max_dd)+" "+m_currency+(mx.dd_from_rates ? "  (estimado con velas)" : (mx.dd_pending ? "  (~ calculando con velas...)" : "  (~ pérdidas realizadas)")),PControl_CLR_RED,FS(10),TA_LEFT|TA_TOP,true);
    string a9="Ganancia / Pérdida bruta: ";
    m_r.Text(half,ty,a9,PControl_CLR_TEXT_DIM,FS(10),TA_LEFT|TA_TOP,false);
    int gx=half+m_r.TextWidth(a9,FS(10));
@@ -4346,6 +4424,7 @@ input double   InpSLViolationFactor = 1.3;     // Factor sobre la pérdida media
 input group "=== Control de matrices ==="
 input string   InpMatrixReinforceTag = "REF";  // Texto del comentario que identifica un refuerzo
 input int      InpMatrixMinOps    = 2;         // Mínimo de posiciones solapadas para contar como matriz
+input bool     InpMatrixDDRates   = true;      // Estimar el DD máximo de cada matriz con las velas del símbolo
 
 input group "=== Actualización ==="
 input int      InpRefreshMs       = 1000;      // Intervalo de refresco de equity (ms)
@@ -4379,6 +4458,7 @@ int OnInit()
    s.clean_chart     =InpCleanChart;
    s.mx_tag          =InpMatrixReinforceTag;
    s.mx_min_ops      =InpMatrixMinOps;
+   s.mx_dd_rates     =InpMatrixDDRates;
 
    if(!g_PControl_panel.Init(s))
       return(INIT_FAILED);
