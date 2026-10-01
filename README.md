@@ -85,7 +85,22 @@ La lista se desplaza con la rueda del ratón cuando hay muchos elementos.
    Botones **Compra/Venta · Compra · Venta** y alternador **Hora CIERRE / Hora APERTURA**.
    Clic en una celda → popup con total de operaciones, distribución compra/venta, ratio
    ganancia/pérdida por dirección, P&L de compras, ventas y total, y lista de operaciones.
-5. **Estadísticas Arena** — Vista **Resumen**: Ratio de Sharpe, Factor de Beneficio y
+5. **Matrices** — Control de matrices (canastas de rejilla). Una matriz es el grupo de
+   posiciones del mismo símbolo y número mágico cuyos intervalos abierto→cerrado se solapan:
+   empieza con la primera apertura y termina cuando no queda ninguna posición abierta. Tabla
+   paginada con **Símbolo, Día, # Matriz** (orden dentro del día por símbolo+mágico),
+   **Apertura, Cierre, Duración, Op. Compra, Op. Venta, DD Máximo, Refuerzo (Sí/No)** y
+   **Beneficio Total**, con totales al pie. Clic en una fila → popup con el detalle de la
+   matriz y sus operaciones (apertura, tipo, lote, precio, comentario, neto).
+   - *DD Máximo*: peor saldo flotante estimado durante la vida de la matriz, recorriendo las
+     velas del símbolo (como el P&L de la canasta es lineal en el precio, se evalúa en el
+     mínimo y el máximo de cada vela, sumando lo ya realizado y las comisiones). Si no hay
+     velas disponibles se muestra con `~` la suma de las pérdidas realizadas. El resultado se
+     guarda en caché por matriz.
+   - *Refuerzo*: `Sí (n)` cuando `n` posiciones llevan en su comentario el texto de
+     `InpMatrixReinforceTag` (por defecto `REF`, como las órdenes `REF_BUY_n` / `REF_SELL_n`).
+   - Solo se listan canastas con al menos `InpMatrixMinOps` posiciones (por defecto 2).
+6. **Estadísticas Arena** — Vista **Resumen**: Ratio de Sharpe, Factor de Beneficio y
    Drawdown Máximo con barras segmentadas y valoración; medidores de **Disciplina** y
    **Eficiencia** (0–100); **Tasa de Errores**; análisis textual; **Alertas de Rendimiento**
    y **Aspectos Positivos**. Vista **Avanzado**: tabla con más de 30 métricas (expectativa,
@@ -113,8 +128,10 @@ La lista se desplaza con la rueda del ratón cuando hay muchos elementos.
 | Disciplina | `InpMaxTradesPerDay` | Umbral de sobre-trading (operaciones/día). |
 | | `InpRevengeMinutes` | Minutos tras una pérdida para marcar revenge trading. |
 | | `InpSLViolationFactor` | Factor sobre la pérdida mediana para marcar violación de stop. |
+| Control de matrices | `InpMatrixReinforceTag` | Texto que, presente en el comentario de una posición, la marca como refuerzo (`REF`). |
+| | `InpMatrixMinOps` | Mínimo de posiciones solapadas para considerar una matriz (2). |
 | Actualización | `InpRefreshMs` | Intervalo del temporizador (ms). |
-| Demostración | `InpDemoData` | Genera un historial sintético de ~40 días (7 símbolos, 3 mágicos) para probar el panel en cuentas sin operaciones. La cabecera muestra `DATOS DE EJEMPLO`. |
+| Demostración | `InpDemoData` | Genera un historial sintético de ~40 días (7 símbolos, 3 mágicos, más matrices de rejilla en `US30`) para probar el panel en cuentas sin operaciones. La cabecera muestra `DATOS DE EJEMPLO`. |
 
 En `MQL5/Presets/panel_demo.set` hay un preset con el modo de demostración activado.
 

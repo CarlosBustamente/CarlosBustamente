@@ -6,7 +6,7 @@
 #property link        ""
 #property version     "1.00"
 #property description "Panel de análisis de rendimiento en tiempo real para posiciones cerradas."
-#property description "Pestañas: Gráfico, Transacciones, Calendario, Por Hora y Estadísticas Arena."
+#property description "Pestañas: Gráfico, Transacciones, Calendario, Por Hora, Matrices y Estadísticas Arena."
 #property description "Filtros por símbolo, número mágico, tipo y rango temporal. No ejecuta operaciones."
 
 //+------------------------------------------------------------------+
@@ -62,7 +62,8 @@ enum ENUM_PControl_TAB
    PControl_TAB_TRANSACTIONS = 1,
    PControl_TAB_CALENDAR     = 2,
    PControl_TAB_HOURLY       = 3,
-   PControl_TAB_ARENA        = 4
+   PControl_TAB_MATRICES     = 4,
+   PControl_TAB_ARENA        = 5
   };
 
 //--- Pestañas del panel de filtros
@@ -89,7 +90,9 @@ enum ENUM_PControl_POPUP
    PControl_POPUP_INFO_HOURLY = 2,
    PControl_POPUP_INFO_ARENA  = 3,
    PControl_POPUP_DATEPICKER  = 4,
-   PControl_POPUP_CAL_DAY     = 5
+   PControl_POPUP_CAL_DAY     = 5,
+   PControl_POPUP_MATRIX      = 6,
+   PControl_POPUP_INFO_MATRIX = 7
   };
 
 //--- Acciones registradas en el mapa de clics
@@ -118,7 +121,10 @@ enum ENUM_PControl_ACTION
    PControl_ACT_DP_PREV,
    PControl_ACT_DP_NEXT,
    PControl_ACT_DP_DAY,
-   PControl_ACT_DP_RESET
+   PControl_ACT_DP_RESET,
+   PControl_ACT_MX_PREV,
+   PControl_ACT_MX_NEXT,
+   PControl_ACT_MX_ROW
   };
 
 //--- Textos en español
@@ -126,7 +132,7 @@ string PControl_DAYS_SHORT[7]  = {"Lun","Mar","Mié","Jue","Vie","Sáb","Dom"};
 string PControl_DAYS_LONG[7]   = {"Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"};
 string PControl_MONTHS[12]     = {"Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"};
 string PControl_RANGE_NAMES[5] = {"Hoy","Semana","Mes","Todo","Personalizado"};
-string PControl_TAB_NAMES[5]   = {"Gráfico","Transacciones","Calendario","Por Hora","Estadísticas Arena"};
+string PControl_TAB_NAMES[6]   = {"Gráfico","Transacciones","Calendario","Por Hora","Matrices","Estadísticas Arena"};
 string PControl_FTAB_NAMES[3]  = {"SF","MN","TP"};
 string PControl_FTAB_TITLES[3] = {"Filtros de Símbolo","Filtros de Mágico","Filtro por Tipo"};
 
@@ -800,6 +806,36 @@ void PControl_ResetRecord(PControl_PosRecord &r)
   }
 
 //+------------------------------------------------------------------+
+//| Matriz (canasta de rejilla): grupo de posiciones del mismo        |
+//| símbolo y mágico cuyos intervalos abierto→cerrado se solapan      |
+//+------------------------------------------------------------------+
+struct PControl_Matrix
+  {
+   string            symbol;
+   long              magic;
+   int               seq;           // # de matriz dentro del día (por símbolo+mágico)
+   datetime          open_time;     // primera apertura
+   datetime          close_time;    // último cierre
+   int               buys;
+   int               sells;
+   int               reinforcements;// posiciones marcadas como refuerzo
+   double            volume;
+   double            net;           // beneficio total neto
+   double            gross_win;
+   double            gross_loss;
+   double            max_dd;        // drawdown máximo estimado (positivo, en dinero)
+   bool              dd_from_rates; // true = calculado con velas; false = aproximación por pérdidas realizadas
+   long              first_pid;     // position_id de la primera posición (clave de caché)
+  };
+
+void PControl_ResetMatrix(PControl_Matrix &m)
+  {
+   m.symbol=""; m.magic=0; m.seq=0; m.open_time=0; m.close_time=0;
+   m.buys=0; m.sells=0; m.reinforcements=0; m.volume=0; m.net=0; m.gross_win=0; m.gross_loss=0;
+   m.max_dd=0; m.dd_from_rates=false; m.first_pid=0;
+  }
+
+//+------------------------------------------------------------------+
 //| Estadística de un día                                             |
 //+------------------------------------------------------------------+
 struct PControl_DayStat
@@ -1098,6 +1134,70 @@ void PControl_TradeData::GenerateDemo()
          ArrayResize(recs,n+1);
          recs[n]=r;
          n++;
+        }
+
+      //--- matrices de rejilla (canastas compra+venta) para la pestaña "Matrices"
+      if(MathRand()%3!=0)
+        {
+         int matrices_today=1+MathRand()%3;
+         int hour=3+MathRand()%4;
+         for(int mi=0; mi<matrices_today; mi++)
+           {
+            datetime mx_open=(datetime)((long)d+hour*3600+(MathRand()%50)*60);
+            long mx_dur=600+(long)(MathRand()%(3*3600));
+            datetime mx_close=(datetime)((long)mx_open+mx_dur);
+            if(mx_close>now) break;
+            int levels=3+MathRand()%4;                 // niveles por lado
+            bool reinforced=(MathRand()%10<3);
+            double base_price=44000.0+(MathRand()%800);
+            double step=5.0;
+            double lot=0.03*(1+MathRand()%4);
+            double target=NormalizeDouble(5.0+MathRand()%41,2);
+            bool success=(MathRand()%100<82);
+            int total_ops=2*levels+(reinforced ? 2 : 0);
+            // reparto del resultado: los niveles del lado ganador cobran, el otro lado pierde
+            int win_side=MathRand()%2;
+            double sum_so_far=0.0;
+            for(int k=0; k<total_ops; k++)
+              {
+               PControl_PosRecord g;
+               PControl_ResetRecord(g);
+               bool is_ref=(k>=2*levels);
+               int side=(is_ref ? win_side : (k%2));
+               int lvl=(is_ref ? (k-2*levels)+1 : k/2+1);
+               g.position_id=500000+n;
+               g.symbol="US30";
+               g.magic=777001;
+               g.type=side;
+               g.vol_in=lot; g.vol_out=lot;
+               g.open_time=(datetime)((long)mx_open+(is_ref ? mx_dur/2 : (long)(MathRand()%180)));
+               g.close_time=(datetime)((long)mx_close+(MathRand()%4));
+               g.open_price=base_price+(side==0 ? 1 : -1)*step*lvl;
+               bool winner=(side==win_side);
+               double amt=(winner ? (3.0+MathRand()%12) : -(1.0+MathRand()%9))*(lot/0.03);
+               if(!success && !winner) amt*=2.5;
+               g.profit=NormalizeDouble(amt,2);
+               g.close_price=g.open_price+(g.type==0 ? 1 : -1)*g.profit/(lot*1.0);
+               g.commission=NormalizeDouble(-0.6*lot/0.03,2);
+               g.swap=0.0;
+               g.net=NormalizeDouble(g.profit+g.swap+g.commission,2);
+               sum_so_far+=g.net;
+               g.comment=(is_ref ? "REF_" : "")+(side==0 ? "BUY_" : "SELL_")+IntegerToString(lvl);
+               g.closed=true;
+               ArrayResize(recs,n+1);
+               recs[n]=g;
+               n++;
+              }
+            // ajustar la última para que la matriz exitosa cierre cerca del objetivo
+            if(success && n>0)
+              {
+               double adj=NormalizeDouble(target-sum_so_far,2);
+               recs[n-1].profit=NormalizeDouble(recs[n-1].profit+adj,2);
+               recs[n-1].net=NormalizeDouble(recs[n-1].net+adj,2);
+              }
+            hour+=2+MathRand()%4;
+            if(hour>20) break;
+           }
         }
      }
 
@@ -1724,6 +1824,8 @@ struct PControl_Settings
    int               refresh_ms;
    bool              demo_data;
    bool              clean_chart;
+   string            mx_tag;        // texto en el comentario que identifica un refuerzo
+   int               mx_min_ops;    // mínimo de posiciones para considerar una matriz
   };
 
 //+------------------------------------------------------------------+
@@ -1750,6 +1852,8 @@ private:
    bool              m_arena_advanced;
    int               m_tx_page;
    int               m_tx_pages;
+   int               m_mx_page;
+   int               m_mx_pages;
    int               m_filter_scroll;
    datetime          m_custom_from;
    datetime          m_custom_to;
@@ -1787,6 +1891,19 @@ private:
    //--- datos calculados en cada Draw
    PControl_PosRecord        m_recs[];
    PControl_Stats            m_stats;
+
+   //--- matrices detectadas sobre m_recs y caché del drawdown estimado
+   PControl_Matrix           m_mx[];
+   int               m_mx_of[];        // índice de matriz de cada registro (-1 = ninguna)
+   int               m_mx_order[];     // matrices ordenadas por apertura descendente
+   long              m_dd_keys[];
+   double            m_dd_vals[];
+   bool              m_dd_ok[];
+   uint              m_dd_stamp[];
+   void              BuildMatrices();
+   double            MatrixDrawdown(const int mi,bool &from_rates);
+   bool              CachedDD(const long key,double &val,bool &ok) const;
+   void              StoreDD(const long key,const double val,const bool ok);
 
    //--- refresco
    bool              m_reload_pending;
@@ -1826,12 +1943,14 @@ private:
    void              DrawInfoPopup(const int kind);
    void              DrawHourCellPopup();
    void              DrawCalDayPopup();
+   void              DrawMatrixPopup();
 
    //--- vistas (definidas en View*.mqh)
    void              DrawChartView(const PControl_Rect &rc);
    void              DrawTransactionsView(const PControl_Rect &rc);
    void              DrawCalendarView(const PControl_Rect &rc);
    void              DrawHourlyView(const PControl_Rect &rc);
+   void              DrawMatricesView(const PControl_Rect &rc);
    void              DrawArenaView(const PControl_Rect &rc);
    void              DrawArenaOverview(const PControl_Rect &rc);
    void              DrawArenaAdvanced(const PControl_Rect &rc);
@@ -1858,7 +1977,7 @@ public:
 PControl_Panel::PControl_Panel() : m_currency("USD"),m_range(PControl_RANGE_ALL),m_tab(PControl_TAB_CHART),m_ftab(PControl_FTAB_SYMBOL),
                    m_minimized(false),m_maximized(true),m_cal_year(2025),m_cal_month(1),
                    m_hour_mode(PControl_HOUR_BOTH),m_hour_by_close(true),m_arena_advanced(false),
-                   m_tx_page(0),m_tx_pages(1),m_filter_scroll(0),m_custom_from(0),m_custom_to(0),
+                   m_tx_page(0),m_tx_pages(1),m_mx_page(0),m_mx_pages(1),m_filter_scroll(0),m_custom_from(0),m_custom_to(0),
                    m_popup(PControl_POPUP_NONE),m_popup_p1(0),m_popup_p2(0),m_dp_view(0),m_dp_stage(0),
                    m_mouse_x(-1),m_mouse_y(-1),m_mouse_inside(false),m_left_down(false),
                    m_chart_scroll_orig(true),m_scroll_disabled(false),m_oneclick_orig(false),
@@ -1986,7 +2105,7 @@ void PControl_Panel::UpdateRange()
      }
    m_data.SetRange(from,to);
    m_data.ApplyFilter();
-   m_tx_page=0;
+   m_tx_page=0; m_mx_page=0;
   }
 
 //+------------------------------------------------------------------+
@@ -1994,6 +2113,7 @@ void PControl_Panel::RefreshData()
   {
    m_data.GetFiltered(m_recs);
    m_data.ComputeStats(m_recs,m_stats);
+   BuildMatrices();
   }
 
 //+------------------------------------------------------------------+
@@ -2181,7 +2301,7 @@ void PControl_Panel::DrawTabs(const int y,const int h)
   {
    int pad=S(10), gap=S(4);
    int x=pad;
-   for(int i=0; i<5; i++)
+   for(int i=0; i<6; i++)
      {
       int w=m_r.TextWidth(PControl_TAB_NAMES[i],FS(11),true)+S(20);
       Button(x,y,w,h,PControl_TAB_NAMES[i],(m_tab==i),PControl_ACT_TAB,i,0,11);
@@ -2266,6 +2386,7 @@ void PControl_Panel::DrawContent(const PControl_Rect &rc)
       case PControl_TAB_TRANSACTIONS: DrawTransactionsView(rc); break;
       case PControl_TAB_CALENDAR:     DrawCalendarView(rc);     break;
       case PControl_TAB_HOURLY:       DrawHourlyView(rc);       break;
+      case PControl_TAB_MATRICES:     DrawMatricesView(rc);     break;
       case PControl_TAB_ARENA:        DrawArenaView(rc);        break;
      }
   }
@@ -2288,6 +2409,8 @@ void PControl_Panel::DrawPopups()
       case PControl_POPUP_INFO_ARENA:  DrawInfoPopup(1);      break;
       case PControl_POPUP_HOUR_CELL:   DrawHourCellPopup();   break;
       case PControl_POPUP_CAL_DAY:     DrawCalDayPopup();     break;
+      case PControl_POPUP_MATRIX:      DrawMatrixPopup();     break;
+      case PControl_POPUP_INFO_MATRIX: DrawInfoPopup(2);      break;
       default: break;
      }
   }
@@ -2388,6 +2511,18 @@ void PControl_Panel::DrawInfoPopup(const int kind)
       lines[5]="Tasa de Errores: % de operaciones marcadas como violación de stop o revenge trading.";
       lines[6]="Violación de stop: pérdida mayor que la pérdida mediana multiplicada por el factor configurado.";
       lines[7]="Revenge trading: apertura pocos minutos después de cerrar una operación perdedora.";
+     }
+   if(kind==2)
+     {
+      title="Control de Matrices";
+      ArrayResize(lines,7);
+      lines[0]="Una matriz es una canasta de posiciones del mismo símbolo y número mágico cuyos intervalos abierto→cerrado se solapan: empieza con la primera apertura y termina cuando ya no queda ninguna posición abierta.";
+      lines[1]="# de matriz: orden dentro del día (por símbolo y mágico) según la hora de apertura.";
+      lines[2]="Op. Compra / Op. Venta: número de posiciones de cada lado que formaron la matriz.";
+      lines[3]="DD Máximo: peor saldo flotante estimado durante la vida de la matriz, recorriendo las velas del símbolo (precio mínimo/máximo de cada vela). Si no hay velas disponibles se muestra con '~' la suma de las pérdidas realizadas.";
+      lines[4]=StringFormat("Refuerzo: 'Sí' cuando alguna posición lleva en su comentario el texto '%s' (configurable en los parámetros del EA). Entre paréntesis, cuántas.",m_set.mx_tag);
+      lines[5]=StringFormat("Solo se consideran matrices las canastas con al menos %d posiciones (configurable).",m_set.mx_min_ops);
+      lines[6]="Haz clic en una fila para ver el detalle de la matriz y sus operaciones.";
      }
 
    int w=MathMin(S(520),m_rc_content.w-S(20));
@@ -2523,6 +2658,7 @@ void PControl_Panel::HandleWheel(const int delta)
    if(InRect(m_rc_content,m_mouse_x,m_mouse_y))
      {
       if(m_tab==PControl_TAB_TRANSACTIONS) Dispatch(delta>0 ? PControl_ACT_TX_PREV : PControl_ACT_TX_NEXT,0,0);
+      else if(m_tab==PControl_TAB_MATRICES) Dispatch(delta>0 ? PControl_ACT_MX_PREV : PControl_ACT_MX_NEXT,0,0);
       else if(m_tab==PControl_TAB_CALENDAR) Dispatch(delta>0 ? PControl_ACT_CAL_PREV : PControl_ACT_CAL_NEXT,0,0);
      }
   }
@@ -2575,14 +2711,14 @@ void PControl_Panel::Dispatch(const int action,const long p1,const long p2)
          else if(m_ftab==PControl_FTAB_MAGIC) m_data.SetAllMagics(!m_data.AllMagicsOn());
          else m_data.SetAllTypes(!(m_data.BuyOn() && m_data.SellOn()));
          m_data.ApplyFilter();
-         m_tx_page=0;
+         m_tx_page=0; m_mx_page=0;
          break;
       case PControl_ACT_FILTER_ITEM:
          if(m_ftab==PControl_FTAB_SYMBOL) m_data.ToggleSymbol((int)p1);
          else if(m_ftab==PControl_FTAB_MAGIC) m_data.ToggleMagic((int)p1);
          else { if(p1==0) m_data.ToggleBuy(); else m_data.ToggleSell(); }
          m_data.ApplyFilter();
-         m_tx_page=0;
+         m_tx_page=0; m_mx_page=0;
          break;
       case PControl_ACT_CAL_PREV:
          m_cal_month--;
@@ -2615,7 +2751,7 @@ void PControl_Panel::Dispatch(const int action,const long p1,const long p2)
          m_arena_advanced=(p1==1);
          break;
       case PControl_ACT_INFO:
-         m_popup=(p1==0 ? PControl_POPUP_INFO_HOURLY : PControl_POPUP_INFO_ARENA);
+         m_popup=(p1==0 ? PControl_POPUP_INFO_HOURLY : (p1==1 ? PControl_POPUP_INFO_ARENA : PControl_POPUP_INFO_MATRIX));
          break;
       case PControl_ACT_POPUP_CLOSE:
       case PControl_ACT_BACKDROP:
@@ -2626,6 +2762,18 @@ void PControl_Panel::Dispatch(const int action,const long p1,const long p2)
          break;
       case PControl_ACT_TX_NEXT:
          if(m_tx_page<m_tx_pages-1) m_tx_page++;
+         break;
+      case PControl_ACT_MX_PREV:
+         if(m_mx_page>0) m_mx_page--;
+         m_popup=PControl_POPUP_NONE;
+         break;
+      case PControl_ACT_MX_NEXT:
+         if(m_mx_page<m_mx_pages-1) m_mx_page++;
+         m_popup=PControl_POPUP_NONE;
+         break;
+      case PControl_ACT_MX_ROW:
+         m_popup=PControl_POPUP_MATRIX;
+         m_popup_p1=p1;
          break;
       case PControl_ACT_MINIMIZE:
          m_minimized=!m_minimized;
@@ -3424,6 +3572,441 @@ void PControl_Panel::DrawHourCellPopup()
   }
 
 //+------------------------------------------------------------------+
+//| SECCIÓN 8b: CONTROL DE MATRICES (detección, DD estimado y vista)  |
+//+------------------------------------------------------------------+
+//| Agrupa los registros filtrados en matrices: posiciones del mismo   |
+//| símbolo+mágico cuyos intervalos abierto→cerrado se solapan.        |
+//+------------------------------------------------------------------+
+void PControl_Panel::BuildMatrices()
+  {
+   int n=ArraySize(m_recs);
+   ArrayResize(m_mx,0);
+   ArrayResize(m_mx_order,0);
+   ArrayResize(m_mx_of,n);
+   for(int i=0; i<n; i++) m_mx_of[i]=-1;
+   if(n==0) return;
+
+   //--- registros ordenados por hora de apertura
+   long keys[];
+   ArrayResize(keys,n);
+   for(int i=0; i<n; i++) keys[i]=(long)m_recs[i].open_time*1000000+i;
+   if(n>1) ArraySort(keys);
+
+   string tag=m_set.mx_tag;
+   StringToUpper(tag);
+
+   //--- última matriz de cada clave símbolo|mágico
+   string open_keys[];
+   int    open_mx[];
+   int    nk=0, count=0;
+   for(int s=0; s<n; s++)
+     {
+      int i=(int)(keys[s]%1000000);
+      string key=m_recs[i].symbol+"|"+IntegerToString(m_recs[i].magic);
+      int ki=-1;
+      for(int k=0; k<nk; k++) if(open_keys[k]==key) { ki=k; break; }
+      int mi=-1;
+      if(ki>=0 && m_recs[i].open_time<m_mx[open_mx[ki]].close_time) mi=open_mx[ki];
+      if(mi<0)
+        {
+         mi=count;
+         ArrayResize(m_mx,count+1);
+         PControl_ResetMatrix(m_mx[mi]);
+         m_mx[mi].symbol    =m_recs[i].symbol;
+         m_mx[mi].magic     =m_recs[i].magic;
+         m_mx[mi].open_time =m_recs[i].open_time;
+         m_mx[mi].close_time=m_recs[i].close_time;
+         m_mx[mi].first_pid =m_recs[i].position_id;
+         count++;
+         if(ki<0)
+           {
+            ki=nk;
+            ArrayResize(open_keys,nk+1);
+            ArrayResize(open_mx,nk+1);
+            open_keys[ki]=key;
+            nk++;
+           }
+         open_mx[ki]=mi;
+        }
+      if(m_recs[i].type==0) m_mx[mi].buys++; else m_mx[mi].sells++;
+      m_mx[mi].volume+=m_recs[i].vol_in;
+      m_mx[mi].net+=m_recs[i].net;
+      if(m_recs[i].net>0) m_mx[mi].gross_win+=m_recs[i].net; else m_mx[mi].gross_loss+=m_recs[i].net;
+      if(m_recs[i].close_time>m_mx[mi].close_time) m_mx[mi].close_time=m_recs[i].close_time;
+      if(tag!="")
+        {
+         string c=m_recs[i].comment;
+         StringToUpper(c);
+         if(StringFind(c,tag)>=0) m_mx[mi].reinforcements++;
+        }
+      m_mx_of[i]=mi;
+     }
+
+   //--- descartar canastas pequeñas, numerar por día y ordenar (más recientes primero)
+   int min_ops=MathMax(1,m_set.mx_min_ops);
+   string day_keys[];
+   int    day_cnt[];
+   int    nd=0;
+   for(int mi=0; mi<count; mi++)
+     {
+      if(m_mx[mi].buys+m_mx[mi].sells<min_ops)
+        {
+         m_mx[mi].seq=-1;
+         for(int i=0; i<n; i++) if(m_mx_of[i]==mi) m_mx_of[i]=-1;
+         continue;
+        }
+      string dk=m_mx[mi].symbol+"|"+IntegerToString(m_mx[mi].magic)+"|"+PControl_DateStr(PControl_DayStart(m_mx[mi].open_time));
+      int di=-1;
+      for(int k=0; k<nd; k++) if(day_keys[k]==dk) { di=k; break; }
+      if(di<0)
+        {
+         di=nd;
+         ArrayResize(day_keys,nd+1);
+         ArrayResize(day_cnt,nd+1);
+         day_keys[di]=dk;
+         day_cnt[di]=0;
+         nd++;
+        }
+      day_cnt[di]++;
+      m_mx[mi].seq=day_cnt[di];
+      bool from_rates=false;
+      m_mx[mi].max_dd=MatrixDrawdown(mi,from_rates);
+      m_mx[mi].dd_from_rates=from_rates;
+     }
+   for(int mi=count-1; mi>=0; mi--)
+     {
+      if(m_mx[mi].seq<0) continue;
+      int k=ArraySize(m_mx_order);
+      ArrayResize(m_mx_order,k+1);
+      m_mx_order[k]=mi;
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Caché del drawdown por matriz (clave: primera posición+composición)|
+//+------------------------------------------------------------------+
+bool PControl_Panel::CachedDD(const long key,double &val,bool &ok) const
+  {
+   for(int i=0; i<ArraySize(m_dd_keys); i++)
+      if(m_dd_keys[i]==key)
+        {
+         // los cálculos sin velas se reintentan cada 30 s (la historia puede estar descargándose)
+         if(!m_dd_ok[i] && GetTickCount()-m_dd_stamp[i]>30000) return(false);
+         val=m_dd_vals[i];
+         ok=m_dd_ok[i];
+         return(true);
+        }
+   return(false);
+  }
+
+void PControl_Panel::StoreDD(const long key,const double val,const bool ok)
+  {
+   int n=ArraySize(m_dd_keys);
+   int idx=-1;
+   for(int i=0; i<n; i++) if(m_dd_keys[i]==key) { idx=i; break; }
+   if(idx<0)
+     {
+      idx=n;
+      ArrayResize(m_dd_keys,n+1);
+      ArrayResize(m_dd_vals,n+1);
+      ArrayResize(m_dd_ok,n+1);
+      ArrayResize(m_dd_stamp,n+1);
+      m_dd_keys[idx]=key;
+     }
+   m_dd_vals[idx]=val;
+   m_dd_ok[idx]=ok;
+   m_dd_stamp[idx]=GetTickCount();
+  }
+
+//+------------------------------------------------------------------+
+//| Drawdown máximo estimado de una matriz: peor saldo flotante        |
+//| (realizado + flotante) recorriendo las velas del símbolo. Como el  |
+//| P&L de la canasta es lineal en el precio, basta evaluar el mínimo  |
+//| y el máximo de cada vela. Sin velas: suma de pérdidas realizadas.  |
+//+------------------------------------------------------------------+
+double PControl_Panel::MatrixDrawdown(const int mi,bool &from_rates)
+  {
+   PControl_Matrix mx=m_mx[mi];
+   long key=mx.first_pid*1000003+(long)(mx.buys*1000+mx.sells);
+   double val=0.0;
+   bool ok=false;
+   if(CachedDD(key,val,ok)) { from_rates=ok; return(val); }
+
+   val=-mx.gross_loss;                       // aproximación por defecto
+   ok=false;
+   if(!m_data.DemoMode())
+     {
+      long dur=(long)mx.close_time-(long)mx.open_time;
+      ENUM_TIMEFRAMES tf=PERIOD_M1;
+      long per=60;
+      if(dur>1500*60)    { tf=PERIOD_M5;  per=300;   }
+      if(dur>1500*300)   { tf=PERIOD_M15; per=900;   }
+      if(dur>1500*900)   { tf=PERIOD_M30; per=1800;  }
+      if(dur>1500*1800)  { tf=PERIOD_H1;  per=3600;  }
+      if(dur>1500*3600)  { tf=PERIOD_H4;  per=14400; }
+      if(dur>1500*14400) { tf=PERIOD_D1;  per=86400; }
+      double tv=SymbolInfoDouble(mx.symbol,SYMBOL_TRADE_TICK_VALUE);
+      double ts=SymbolInfoDouble(mx.symbol,SYMBOL_TRADE_TICK_SIZE);
+      MqlRates rates[];
+      int nb=0;
+      if(tv>0.0 && ts>0.0)
+         nb=CopyRates(mx.symbol,tf,(datetime)((long)mx.open_time-per),(datetime)((long)mx.close_time+per),rates);
+      if(nb>0)
+        {
+         int members[];
+         int nm=0;
+         for(int i=0; i<ArraySize(m_recs); i++)
+            if(m_mx_of[i]==mi) { ArrayResize(members,nm+1); members[nm++]=i; }
+         double worst=0.0;
+         for(int b=0; b<nb; b++)
+           {
+            datetime bs=rates[b].time;
+            datetime be=(datetime)((long)bs+per);
+            if(be<=mx.open_time || bs>=mx.close_time) continue;
+            double realized=0.0, at_low=0.0, at_high=0.0;
+            for(int k=0; k<nm; k++)
+              {
+               int ri=members[k];
+               if(m_recs[ri].close_time<bs) { realized+=m_recs[ri].net; continue; }
+               if(m_recs[ri].open_time>=be) continue;
+               double sign=(m_recs[ri].type==0 ? 1.0 : -1.0);
+               double mult=m_recs[ri].vol_in*tv/ts;
+               at_low +=sign*(rates[b].low -m_recs[ri].open_price)*mult;
+               at_high+=sign*(rates[b].high-m_recs[ri].open_price)*mult;
+               realized+=m_recs[ri].commission;
+              }
+            double eq=realized+MathMin(at_low,at_high);
+            if(eq<worst) worst=eq;
+           }
+         val=-worst;
+         ok=true;
+        }
+     }
+   StoreDD(key,val,ok);
+   from_rates=ok;
+   return(val);
+  }
+
+//+------------------------------------------------------------------+
+//| Vista "Matrices": tabla paginada de canastas detectadas            |
+//+------------------------------------------------------------------+
+void PControl_Panel::DrawMatricesView(const PControl_Rect &rc)
+  {
+   m_r.Box(rc.x,rc.y,rc.w,rc.h,PControl_CLR_PANEL,PControl_CLR_BORDER);
+   string title="Control de Matrices";
+   m_r.Text(rc.x+S(10),rc.y+S(8),title,PControl_CLR_BLUE_LIGHT,FS(13),TA_LEFT|TA_TOP,true);
+   int ttw=m_r.TextWidth(title,FS(13),true);
+   int ix=rc.x+S(10)+ttw+S(16), iy=rc.y+S(16);
+   m_r.Circle(ix,iy,S(7),PControl_CLR_BLUE);
+   m_r.Text(ix,iy,"i",PControl_CLR_WHITE,FS(9),TA_CENTER|TA_VCENTER,true);
+   Hit(ix-S(8),iy-S(8),S(16),S(16),PControl_ACT_INFO,2);
+
+   int n=ArraySize(m_mx_order);
+   int rowh=S(18);
+   int table_y=rc.y+S(32);
+   int footer_h=S(26);
+   int table_h=rc.h-S(32)-footer_h-S(6);
+   int rows=MathMax(1,(table_h-rowh)/rowh);
+   m_mx_pages=MathMax(1,(n+rows-1)/rows);
+   if(m_mx_page>m_mx_pages-1) m_mx_page=m_mx_pages-1;
+   if(m_mx_page<0) m_mx_page=0;
+
+   //--- paginación
+   int nav=S(18);
+   int nx=rc.x+rc.w-S(10)-nav;
+   Button(nx,rc.y+S(7),nav,nav,">",false,PControl_ACT_MX_NEXT,0,0,10);
+   string pg=StringFormat("%d / %d",m_mx_page+1,m_mx_pages);
+   int pw=m_r.TextWidth(pg,FS(10))+S(12);
+   nx-=pw;
+   m_r.Text(nx+pw/2,rc.y+S(7)+nav/2,pg,PControl_CLR_TEXT_DIM,FS(10),TA_CENTER|TA_VCENTER,false);
+   nx-=nav;
+   Button(nx,rc.y+S(7),nav,nav,"<",false,PControl_ACT_MX_PREV,0,0,10);
+
+   if(n==0)
+     {
+      DrawEmpty(rc,StringFormat("Sin matrices en el rango seleccionado (canastas de al menos %d posiciones solapadas)",MathMax(1,m_set.mx_min_ops)));
+      return;
+     }
+
+   //--- columnas
+   string names[11]={"Símbolo","Día","# Matriz","Apertura","Cierre","Duración","Op. Compra","Op. Venta","DD Máximo","Refuerzo","Beneficio Total"};
+   double frac[11]={0.09,0.09,0.06,0.09,0.10,0.08,0.08,0.08,0.11,0.08,0.14};
+   int tx=rc.x+S(10), tw=rc.w-S(20);
+   int colx[12];
+   colx[0]=tx;
+   for(int c=0; c<11; c++) colx[c+1]=colx[c]+(int)MathRound(tw*frac[c]);
+   colx[11]=tx+tw;
+
+   //--- cabecera
+   m_r.Fill(tx,table_y,tw,rowh,PControl_CLR_PANEL3);
+   for(int c=0; c<11; c++)
+      m_r.Text((colx[c]+colx[c+1])/2,table_y+rowh/2,m_r.Ellipsis(names[c],colx[c+1]-colx[c]-S(4),FS(10),true),PControl_CLR_TEXT_DIM,FS(10),TA_CENTER|TA_VCENTER,true);
+
+   //--- filas
+   int start=m_mx_page*rows;
+   int tot_buys=0, tot_sells=0, tot_ref=0;
+   double tot_net=0.0;
+   for(int k=0; k<n; k++)
+     {
+      PControl_Matrix t=m_mx[m_mx_order[k]];
+      tot_buys+=t.buys; tot_sells+=t.sells; tot_net+=t.net;
+      if(t.reinforcements>0) tot_ref++;
+     }
+   for(int k=0; k<rows; k++)
+     {
+      int oi=start+k;
+      if(oi>=n) break;
+      int mi=m_mx_order[oi];
+      PControl_Matrix mx=m_mx[mi];
+      int ry=table_y+rowh*(k+1);
+      if((k%2)==1) m_r.Fill(tx,ry,tw,rowh,PControl_Mix(PControl_CLR_PANEL,PControl_CLR_PANEL2,0.6));
+      if(m_popup==PControl_POPUP_MATRIX && m_popup_p1==mi) m_r.Fill(tx,ry,tw,rowh,PControl_Mix(PControl_CLR_BLUE,PControl_CLR_PANEL,0.75));
+      Hit(tx,ry,tw,rowh,PControl_ACT_MX_ROW,mi);
+      int cy=ry+rowh/2;
+
+      MqlDateTime od, cd;
+      TimeToStruct(mx.open_time,od);
+      TimeToStruct(mx.close_time,cd);
+      string open_s=TimeToString(mx.open_time,TIME_SECONDS);
+      string close_s=TimeToString(mx.close_time,TIME_SECONDS);
+      long day_diff=((long)PControl_DayStart(mx.close_time)-(long)PControl_DayStart(mx.open_time))/86400;
+      if(day_diff>0) close_s+=StringFormat(" (+%dd)",(int)day_diff);
+      string day_s=StringFormat("%s %s",PControl_DAYS_SHORT[PControl_WeekDay(mx.open_time)],PControl_DateStr(mx.open_time));
+
+      string dd_s=(mx.dd_from_rates ? "" : "~")+PControl_Money(mx.max_dd);
+      color  dd_c=(mx.max_dd>0 ? PControl_CLR_RED : PControl_CLR_TEXT_MUTED);
+      string ref_s=(mx.reinforcements>0 ? StringFormat("Sí (%d)",mx.reinforcements) : "No");
+      color  ref_c=(mx.reinforcements>0 ? PControl_CLR_ORANGE : PControl_CLR_TEXT_MUTED);
+
+      m_r.Text((colx[0]+colx[1])/2,cy,m_r.Ellipsis(mx.symbol,colx[1]-colx[0]-S(6),FS(10)),PControl_CLR_TEXT,FS(10),TA_CENTER|TA_VCENTER,false);
+      m_r.Text((colx[1]+colx[2])/2,cy,m_r.Ellipsis(day_s,colx[2]-colx[1]-S(6),FS(10)),PControl_CLR_TEXT_DIM,FS(10),TA_CENTER|TA_VCENTER,false);
+      m_r.Text((colx[2]+colx[3])/2,cy,"#"+IntegerToString(mx.seq),PControl_CLR_BLUE_LIGHT,FS(10),TA_CENTER|TA_VCENTER,true);
+      m_r.Text((colx[3]+colx[4])/2,cy,open_s,PControl_CLR_TEXT_DIM,FS(10),TA_CENTER|TA_VCENTER,false);
+      m_r.Text((colx[4]+colx[5])/2,cy,m_r.Ellipsis(close_s,colx[5]-colx[4]-S(6),FS(10)),PControl_CLR_TEXT_DIM,FS(10),TA_CENTER|TA_VCENTER,false);
+      m_r.Text((colx[5]+colx[6])/2,cy,PControl_Duration((long)mx.close_time-(long)mx.open_time),PControl_CLR_TEXT_MUTED,FS(10),TA_CENTER|TA_VCENTER,false);
+      m_r.Text((colx[6]+colx[7])/2,cy,IntegerToString(mx.buys),PControl_CLR_GREEN,FS(10),TA_CENTER|TA_VCENTER,true);
+      m_r.Text((colx[7]+colx[8])/2,cy,IntegerToString(mx.sells),PControl_CLR_RED,FS(10),TA_CENTER|TA_VCENTER,true);
+      m_r.Text((colx[8]+colx[9])/2,cy,dd_s,dd_c,FS(10),TA_CENTER|TA_VCENTER,false);
+      m_r.Text((colx[9]+colx[10])/2,cy,ref_s,ref_c,FS(10),TA_CENTER|TA_VCENTER,true);
+      m_r.Text((colx[10]+colx[11])/2,cy,PControl_Signed(mx.net)+" "+m_currency,PControl_PnLColor(mx.net),FS(10),TA_CENTER|TA_VCENTER,true);
+     }
+   m_r.Frame(tx,table_y,tw,rowh*(rows+1),PControl_CLR_BORDER);
+
+   //--- pie con totales
+   int fy=rc.y+rc.h-footer_h-S(4);
+   m_r.HLine(tx,tx+tw-1,fy,PControl_CLR_BORDER2);
+   string foot=StringFormat("%d matrices  ·  %d con refuerzo  ·  Compras: %d  ·  Ventas: %d  ·  Beneficio: ",n,tot_ref,tot_buys,tot_sells);
+   int fw=m_r.TextWidth(foot,FS(10));
+   m_r.Text(tx,fy+footer_h/2,foot,PControl_CLR_TEXT_DIM,FS(10),TA_LEFT|TA_VCENTER,false);
+   m_r.Text(tx+fw,fy+footer_h/2,PControl_Signed(tot_net)+" "+m_currency,PControl_PnLColor(tot_net),FS(10),TA_LEFT|TA_VCENTER,true);
+   string right=StringFormat("Mostrando %d - %d",start+1,MathMin(n,start+rows));
+   m_r.Text(tx+tw,fy+footer_h/2,right,PControl_CLR_TEXT_MUTED,FS(10),TA_RIGHT|TA_VCENTER,false);
+  }
+
+//+------------------------------------------------------------------+
+//| Popup con el detalle de una matriz y sus operaciones               |
+//+------------------------------------------------------------------+
+void PControl_Panel::DrawMatrixPopup()
+  {
+   int mi=(int)m_popup_p1;
+   if(mi<0 || mi>=ArraySize(m_mx)) { m_popup=PControl_POPUP_NONE; return; }
+   PControl_Matrix mx=m_mx[mi];
+
+   //--- miembros ordenados por apertura
+   int members[];
+   int nm=0;
+   for(int i=0; i<ArraySize(m_recs); i++)
+      if(m_mx_of[i]==mi) { ArrayResize(members,nm+1); members[nm++]=i; }
+   long keys[];
+   ArrayResize(keys,nm);
+   for(int k=0; k<nm; k++) keys[k]=(long)m_recs[members[k]].open_time*1000000+members[k];
+   if(nm>1) ArraySort(keys);
+
+   int max_rows=MathMin(nm,14);
+   int rowh=S(15);
+   int w=MathMin(S(560),m_rc_content.w-S(20));
+   int hgt=S(150)+(max_rows>0 ? S(22)+max_rows*rowh : 0)+(nm>max_rows ? S(14) : 0);
+   int x=m_rc_content.x+(m_rc_content.w-w)/2;
+   int y=m_rc_content.y+MathMax(S(6),(m_rc_content.h-hgt)/2);
+
+   string title=StringFormat("Matriz #%d  ·  %s  ·  %s %s",mx.seq,mx.symbol,PControl_DAYS_LONG[PControl_WeekDay(mx.open_time)],PControl_DateStr(mx.open_time));
+   PopupFrame(x,y,w,hgt,title);
+
+   int lx=x+S(12), ty=y+S(32), lh=S(17);
+   int half=x+w/2;
+   string a1="Apertura: ";
+   m_r.Text(lx,ty,a1,PControl_CLR_TEXT_DIM,FS(10),TA_LEFT|TA_TOP,false);
+   m_r.Text(lx+m_r.TextWidth(a1,FS(10)),ty,PControl_DateTimeStr(mx.open_time),PControl_CLR_TEXT,FS(10),TA_LEFT|TA_TOP,true);
+   string a2="Cierre: ";
+   m_r.Text(half,ty,a2,PControl_CLR_TEXT_DIM,FS(10),TA_LEFT|TA_TOP,false);
+   m_r.Text(half+m_r.TextWidth(a2,FS(10)),ty,PControl_DateTimeStr(mx.close_time),PControl_CLR_TEXT,FS(10),TA_LEFT|TA_TOP,true);
+   ty+=lh;
+   string a3="Duración: ";
+   m_r.Text(lx,ty,a3,PControl_CLR_TEXT_DIM,FS(10),TA_LEFT|TA_TOP,false);
+   m_r.Text(lx+m_r.TextWidth(a3,FS(10)),ty,PControl_Duration((long)mx.close_time-(long)mx.open_time),PControl_CLR_TEXT,FS(10),TA_LEFT|TA_TOP,true);
+   string a4="Mágico: ";
+   m_r.Text(half,ty,a4,PControl_CLR_TEXT_DIM,FS(10),TA_LEFT|TA_TOP,false);
+   m_r.Text(half+m_r.TextWidth(a4,FS(10)),ty,IntegerToString(mx.magic)+"   ·   Volumen: "+DoubleToString(mx.volume,2)+" lotes",PControl_CLR_TEXT,FS(10),TA_LEFT|TA_TOP,true);
+   ty+=lh;
+   string a5="Op. Compra: ";
+   m_r.Text(lx,ty,a5,PControl_CLR_TEXT_DIM,FS(10),TA_LEFT|TA_TOP,false);
+   int ax=lx+m_r.TextWidth(a5,FS(10));
+   m_r.Text(ax,ty,IntegerToString(mx.buys),PControl_CLR_GREEN,FS(10),TA_LEFT|TA_TOP,true);
+   ax+=m_r.TextWidth(IntegerToString(mx.buys),FS(10),true)+S(14);
+   string a6="Op. Venta: ";
+   m_r.Text(ax,ty,a6,PControl_CLR_TEXT_DIM,FS(10),TA_LEFT|TA_TOP,false);
+   m_r.Text(ax+m_r.TextWidth(a6,FS(10)),ty,IntegerToString(mx.sells),PControl_CLR_RED,FS(10),TA_LEFT|TA_TOP,true);
+   string a7="Refuerzo: ";
+   m_r.Text(half,ty,a7,PControl_CLR_TEXT_DIM,FS(10),TA_LEFT|TA_TOP,false);
+   m_r.Text(half+m_r.TextWidth(a7,FS(10)),ty,(mx.reinforcements>0 ? StringFormat("Sí (%d posiciones)",mx.reinforcements) : "No"),(mx.reinforcements>0 ? PControl_CLR_ORANGE : PControl_CLR_TEXT),FS(10),TA_LEFT|TA_TOP,true);
+   ty+=lh;
+   string a8="DD Máximo: ";
+   m_r.Text(lx,ty,a8,PControl_CLR_TEXT_DIM,FS(10),TA_LEFT|TA_TOP,false);
+   m_r.Text(lx+m_r.TextWidth(a8,FS(10)),ty,PControl_Money(mx.max_dd)+" "+m_currency+(mx.dd_from_rates ? "  (estimado con velas)" : "  (~ pérdidas realizadas)"),PControl_CLR_RED,FS(10),TA_LEFT|TA_TOP,true);
+   string a9="Ganancia / Pérdida bruta: ";
+   m_r.Text(half,ty,a9,PControl_CLR_TEXT_DIM,FS(10),TA_LEFT|TA_TOP,false);
+   int gx=half+m_r.TextWidth(a9,FS(10));
+   m_r.Text(gx,ty,PControl_Signed(mx.gross_win),PControl_CLR_GREEN,FS(10),TA_LEFT|TA_TOP,true);
+   gx+=m_r.TextWidth(PControl_Signed(mx.gross_win),FS(10),true);
+   m_r.Text(gx,ty," / ",PControl_CLR_TEXT_DIM,FS(10),TA_LEFT|TA_TOP,false);
+   m_r.Text(gx+m_r.TextWidth(" / ",FS(10)),ty,PControl_Signed(mx.gross_loss),PControl_CLR_RED,FS(10),TA_LEFT|TA_TOP,true);
+   ty+=lh;
+   string a10="Beneficio Total: ";
+   m_r.Text(lx,ty,a10,PControl_CLR_TEXT,FS(11),TA_LEFT|TA_TOP,true);
+   m_r.Text(lx+m_r.TextWidth(a10,FS(11),true),ty,PControl_Signed(mx.net)+" "+m_currency,PControl_PnLColor(mx.net),FS(11),TA_LEFT|TA_TOP,true);
+   ty+=lh+S(2);
+
+   if(max_rows>0)
+     {
+      m_r.HLine(lx,x+w-S(12),ty,PControl_CLR_BORDER2);
+      ty+=S(6);
+      int c0=lx, c1=lx+S(70), c2=lx+S(125), c3=lx+S(170), c4=lx+S(250), c5=x+w-S(12);
+      m_r.Text(c0,ty,"Apertura",PControl_CLR_TEXT_MUTED,FS(9),TA_LEFT|TA_TOP,true);
+      m_r.Text(c1,ty,"Tipo",PControl_CLR_TEXT_MUTED,FS(9),TA_LEFT|TA_TOP,true);
+      m_r.Text(c2,ty,"Lote",PControl_CLR_TEXT_MUTED,FS(9),TA_LEFT|TA_TOP,true);
+      m_r.Text(c3,ty,"Precio",PControl_CLR_TEXT_MUTED,FS(9),TA_LEFT|TA_TOP,true);
+      m_r.Text(c4,ty,"Comentario",PControl_CLR_TEXT_MUTED,FS(9),TA_LEFT|TA_TOP,true);
+      m_r.Text(c5,ty,"Neto",PControl_CLR_TEXT_MUTED,FS(9),TA_RIGHT|TA_TOP,true);
+      ty+=S(14);
+      int digits=(int)SymbolInfoInteger(mx.symbol,SYMBOL_DIGITS);
+      if(digits<=0 || digits>8) digits=2;
+      for(int k=0; k<max_rows; k++)
+        {
+         PControl_PosRecord r=m_recs[(int)(keys[k]%1000000)];
+         m_r.Text(c0,ty,TimeToString(r.open_time,TIME_SECONDS),PControl_CLR_TEXT_DIM,FS(9),TA_LEFT|TA_TOP,false);
+         m_r.Text(c1,ty,(r.type==0 ? "Compra" : "Venta"),(r.type==0 ? PControl_CLR_GREEN : PControl_CLR_RED),FS(9),TA_LEFT|TA_TOP,false);
+         m_r.Text(c2,ty,DoubleToString(r.vol_in,2),PControl_CLR_TEXT,FS(9),TA_LEFT|TA_TOP,false);
+         m_r.Text(c3,ty,DoubleToString(r.open_price,digits),PControl_CLR_TEXT_DIM,FS(9),TA_LEFT|TA_TOP,false);
+         m_r.Text(c4,ty,m_r.Ellipsis(r.comment,c5-c4-S(70),FS(9)),PControl_CLR_TEXT_DIM,FS(9),TA_LEFT|TA_TOP,false);
+         m_r.Text(c5,ty,PControl_Signed(r.net),PControl_PnLColor(r.net),FS(9),TA_RIGHT|TA_TOP,true);
+         ty+=rowh;
+        }
+      if(nm>max_rows)
+         m_r.Text(lx,ty,StringFormat("... y %d operación(es) más",nm-max_rows),PControl_CLR_TEXT_MUTED,FS(9),TA_LEFT|TA_TOP,false);
+     }
+  }
+
+//+------------------------------------------------------------------+
 //| SECCIÓN 9: VISTA "ESTADÍSTICAS ARENA"                             |
 //+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
@@ -3760,6 +4343,10 @@ input int      InpMaxTradesPerDay = 3;         // Umbral de sobre-trading (opera
 input int      InpRevengeMinutes  = 5;         // Minutos tras una pérdida para marcar revenge trading
 input double   InpSLViolationFactor = 1.3;     // Factor sobre la pérdida mediana para marcar violación de stop
 
+input group "=== Control de matrices ==="
+input string   InpMatrixReinforceTag = "REF";  // Texto del comentario que identifica un refuerzo
+input int      InpMatrixMinOps    = 2;         // Mínimo de posiciones solapadas para contar como matriz
+
 input group "=== Actualización ==="
 input int      InpRefreshMs       = 1000;      // Intervalo de refresco de equity (ms)
 
@@ -3790,6 +4377,8 @@ int OnInit()
    s.refresh_ms      =InpRefreshMs;
    s.demo_data       =InpDemoData;
    s.clean_chart     =InpCleanChart;
+   s.mx_tag          =InpMatrixReinforceTag;
+   s.mx_min_ops      =InpMatrixMinOps;
 
    if(!g_PControl_panel.Init(s))
       return(INIT_FAILED);
