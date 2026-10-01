@@ -86,9 +86,9 @@ La lista se desplaza con la rueda del ratón cuando hay muchos elementos.
    Clic en una celda → popup con total de operaciones, distribución compra/venta, ratio
    ganancia/pérdida por dirección, P&L de compras, ventas y total, y lista de operaciones.
 5. **Matrices** — Control de matrices (canastas de rejilla). Una matriz es el grupo de
-   posiciones del mismo símbolo y número mágico cuyos intervalos abierto→cerrado se solapan:
+   posiciones del mismo símbolo (compras y ventas, con cualquier número mágico) cuyos intervalos abierto→cerrado se solapan:
    empieza con la primera apertura y termina cuando no queda ninguna posición abierta. Tabla
-   paginada con **Símbolo, Día, # Matriz** (orden dentro del día por símbolo+mágico),
+   paginada con **Símbolo, Día, # Matriz** (orden dentro del día por símbolo),
    **Apertura, Cierre, Duración, Op. Compra, Op. Venta, DD Máximo, Refuerzo (Sí/No)** y
    **Beneficio Total**, con totales al pie. Clic en una fila → popup con el detalle de la
    matriz y sus operaciones (apertura, tipo, lote, precio, comentario, neto).
@@ -133,6 +133,7 @@ La lista se desplaza con la rueda del ratón cuando hay muchos elementos.
 | Control de matrices | `InpMatrixReinforceTag` | Texto que, presente en el comentario de una posición, la marca como refuerzo (`REF`). |
 | | `InpMatrixMinOps` | Mínimo de posiciones solapadas para considerar una matriz (2). |
 | | `InpMatrixDDRates` | Estimar el DD máximo de cada matriz con las velas del símbolo (true). |
+| | `InpMatrixByMagic` | Separar las matrices también por número mágico (false: solo por símbolo, útil si el EA usa un mágico por orden). |
 | Actualización | `InpRefreshMs` | Intervalo del temporizador (ms). |
 | Demostración | `InpDemoData` | Genera un historial sintético de ~40 días (7 símbolos, 3 mágicos, más matrices de rejilla en `US30`) para probar el panel en cuentas sin operaciones. La cabecera muestra `DATOS DE EJEMPLO`. |
 

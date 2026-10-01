@@ -807,13 +807,14 @@ void PControl_ResetRecord(PControl_PosRecord &r)
 
 //+------------------------------------------------------------------+
 //| Matriz (canasta de rejilla): grupo de posiciones del mismo        |
-//| símbolo y mágico cuyos intervalos abierto→cerrado se solapan      |
+//| símbolo cuyos intervalos abierto→cerrado se solapan                |
 //+------------------------------------------------------------------+
 struct PControl_Matrix
   {
    string            symbol;
    long              magic;
-   int               seq;           // # de matriz dentro del día (por símbolo+mágico)
+   int               seq;           // # de matriz dentro del día (por símbolo)
+   bool              mixed_magic;   // la canasta contiene varios números mágicos
    datetime          open_time;     // primera apertura
    datetime          close_time;    // último cierre
    int               buys;
@@ -833,7 +834,7 @@ void PControl_ResetMatrix(PControl_Matrix &m)
   {
    m.symbol=""; m.magic=0; m.seq=0; m.open_time=0; m.close_time=0;
    m.buys=0; m.sells=0; m.reinforcements=0; m.volume=0; m.net=0; m.gross_win=0; m.gross_loss=0;
-   m.max_dd=0; m.dd_from_rates=false; m.dd_pending=false; m.first_pid=0;
+   m.max_dd=0; m.dd_from_rates=false; m.dd_pending=false; m.first_pid=0; m.mixed_magic=false;
   }
 
 //+------------------------------------------------------------------+
@@ -1828,6 +1829,7 @@ struct PControl_Settings
    string            mx_tag;        // texto en el comentario que identifica un refuerzo
    int               mx_min_ops;    // mínimo de posiciones para considerar una matriz
    bool              mx_dd_rates;   // estimar el DD máximo de cada matriz con las velas del símbolo
+   bool              mx_by_magic;   // separar las matrices también por número mágico
   };
 
 //+------------------------------------------------------------------+
@@ -2531,8 +2533,8 @@ void PControl_Panel::DrawInfoPopup(const int kind)
      {
       title="Control de Matrices";
       ArrayResize(lines,7);
-      lines[0]="Una matriz es una canasta de posiciones del mismo símbolo y número mágico cuyos intervalos abierto→cerrado se solapan: empieza con la primera apertura y termina cuando ya no queda ninguna posición abierta.";
-      lines[1]="# de matriz: orden dentro del día (por símbolo y mágico) según la hora de apertura.";
+      lines[0]="Una matriz es una canasta de posiciones del mismo símbolo (compras y ventas, con cualquier número mágico) cuyos intervalos abierto→cerrado se solapan: empieza con la primera apertura y termina cuando ya no queda ninguna posición abierta.";
+      lines[1]="# de matriz: orden dentro del día (por símbolo) según la hora de apertura.";
       lines[2]="Op. Compra / Op. Venta: número de posiciones de cada lado que formaron la matriz.";
       lines[3]="DD Máximo: peor saldo flotante estimado durante la vida de la matriz, recorriendo las velas del símbolo (precio mínimo/máximo de cada vela). Si no hay velas disponibles se muestra con '~' la suma de las pérdidas realizadas.";
       lines[4]=StringFormat("Refuerzo: 'Sí' cuando alguna posición lleva en su comentario el texto '%s' (configurable en los parámetros del EA). Entre paréntesis, cuántas.",m_set.mx_tag);
@@ -3599,7 +3601,7 @@ void PControl_Panel::DrawHourCellPopup()
 //| SECCIÓN 8b: CONTROL DE MATRICES (detección, DD estimado y vista)  |
 //+------------------------------------------------------------------+
 //| Agrupa los registros filtrados en matrices: posiciones del mismo   |
-//| símbolo+mágico cuyos intervalos abierto→cerrado se solapan.        |
+//| símbolo cuyos intervalos abierto→cerrado se solapan.               |
 //+------------------------------------------------------------------+
 void PControl_Panel::BuildMatrices()
   {
@@ -3619,7 +3621,7 @@ void PControl_Panel::BuildMatrices()
    string tag=m_set.mx_tag;
    StringToUpper(tag);
 
-   //--- última matriz de cada clave símbolo|mágico
+   //--- última matriz de cada clave (símbolo, o símbolo|mágico si así se configura)
    string open_keys[];
    int    open_mx[];
    int    mx_key[];
@@ -3627,7 +3629,8 @@ void PControl_Panel::BuildMatrices()
    for(int s=0; s<n; s++)
      {
       int i=(int)(keys[s]%1000000);
-      string key=m_recs[i].symbol+"|"+IntegerToString(m_recs[i].magic);
+      string key=m_recs[i].symbol;
+      if(m_set.mx_by_magic) key+="|"+IntegerToString(m_recs[i].magic);
       int ki=-1;
       for(int k=0; k<nk; k++) if(open_keys[k]==key) { ki=k; break; }
       int mi=-1;
@@ -3656,6 +3659,7 @@ void PControl_Panel::BuildMatrices()
          mx_key[mi]=ki;
         }
       if(m_recs[i].type==0) m_mx[mi].buys++; else m_mx[mi].sells++;
+      if(m_recs[i].magic!=m_mx[mi].magic) m_mx[mi].mixed_magic=true;
       m_mx[mi].volume+=m_recs[i].vol_in;
       m_mx[mi].net+=m_recs[i].net;
       if(m_recs[i].net>0) m_mx[mi].gross_win+=m_recs[i].net; else m_mx[mi].gross_loss+=m_recs[i].net;
@@ -3688,7 +3692,7 @@ void PControl_Panel::BuildMatrices()
         }
      }
 
-   //--- descartar canastas pequeñas, numerar por día (por símbolo+mágico) y ordenar (más recientes primero)
+   //--- descartar canastas pequeñas, numerar por día (por clave) y ordenar (más recientes primero)
    int min_ops=MathMax(1,m_set.mx_min_ops);
    datetime last_day[];
    int      day_cnt[];
@@ -4024,7 +4028,7 @@ void PControl_Panel::DrawMatrixPopup()
    m_r.Text(lx+m_r.TextWidth(a3,FS(10)),ty,PControl_Duration((long)mx.close_time-(long)mx.open_time),PControl_CLR_TEXT,FS(10),TA_LEFT|TA_TOP,true);
    string a4="Mágico: ";
    m_r.Text(half,ty,a4,PControl_CLR_TEXT_DIM,FS(10),TA_LEFT|TA_TOP,false);
-   m_r.Text(half+m_r.TextWidth(a4,FS(10)),ty,IntegerToString(mx.magic)+"   ·   Volumen: "+DoubleToString(mx.volume,2)+" lotes",PControl_CLR_TEXT,FS(10),TA_LEFT|TA_TOP,true);
+   m_r.Text(half+m_r.TextWidth(a4,FS(10)),ty,(mx.mixed_magic ? "varios" : IntegerToString(mx.magic))+"   ·   Volumen: "+DoubleToString(mx.volume,2)+" lotes",PControl_CLR_TEXT,FS(10),TA_LEFT|TA_TOP,true);
    ty+=lh;
    string a5="Op. Compra: ";
    m_r.Text(lx,ty,a5,PControl_CLR_TEXT_DIM,FS(10),TA_LEFT|TA_TOP,false);
@@ -4425,6 +4429,7 @@ input group "=== Control de matrices ==="
 input string   InpMatrixReinforceTag = "REF";  // Texto del comentario que identifica un refuerzo
 input int      InpMatrixMinOps    = 2;         // Mínimo de posiciones solapadas para contar como matriz
 input bool     InpMatrixDDRates   = true;      // Estimar el DD máximo de cada matriz con las velas del símbolo
+input bool     InpMatrixByMagic   = false;     // Separar las matrices también por número mágico (false = solo por símbolo)
 
 input group "=== Actualización ==="
 input int      InpRefreshMs       = 1000;      // Intervalo de refresco de equity (ms)
@@ -4459,6 +4464,7 @@ int OnInit()
    s.mx_tag          =InpMatrixReinforceTag;
    s.mx_min_ops      =InpMatrixMinOps;
    s.mx_dd_rates     =InpMatrixDDRates;
+   s.mx_by_magic     =InpMatrixByMagic;
 
    if(!g_PControl_panel.Init(s))
       return(INIT_FAILED);
