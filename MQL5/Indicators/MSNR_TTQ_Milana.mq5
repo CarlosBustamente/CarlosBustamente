@@ -68,9 +68,11 @@ input bool              InpShowH4             = true;          // Show H4 Levels
 input bool              InpShowH1             = true;          // Show H1 Levels
 
 input group "=== DETECTION ==="
-input int               InpLookbackDaily      = 60;            // Daily lookback (bars scanned for A/V)
-input int               InpLookbackH4         = 90;            // H4 lookback (bars scanned for A/V)
-input int               InpLookbackH1         = 72;            // H1 lookback (bars scanned for A/V)
+input int               InpRecentPerType      = 3;             // Recent A-shapes and V-shapes kept per timeframe
+input int               InpLookbackDaily      = 60;            // Daily lookback (max bars scanned)
+input int               InpLookbackH4         = 90;            // H4 lookback (max bars scanned)
+input int               InpLookbackH1         = 72;            // H1 lookback (max bars scanned)
+input double            InpMinBodyATR         = 0.0;           // Min candle body (x ATR14 of the TF, 0 = off)
 input bool              InpHideBroken         = false;         // Hide levels broken by a candle close
 input double            InpMergeTolerancePct  = 0.05;          // Merge tolerance (% of price)
 input int               InpMergeTolerancePts  = 0;             // Merge tolerance (points, 0 = use %)
@@ -223,6 +225,7 @@ datetime      g_lastRebuild    = 0;
 datetime      g_lastChartBar   = 0;
 bool          g_dataMissing    = false;
 bool          g_tableCreated   = false;
+bool          g_levelObjectsCreated = false;
 SSessionRange g_asia, g_asiaKZ, g_london, g_londonKZ, g_ny, g_nyKZ;
 
 // cached table state to avoid redundant object updates
@@ -438,24 +441,50 @@ void CollectTimeframe(const ENUM_TIMEFRAMES tf, const bool shapes, const bool oc
 
    if(shapes)
      {
-      // i is the SECOND candle of the pattern (completed), i+1 the first one
+      // Minimum body size filter, relative to the average range of the last 14 completed candles
+      double minBody = 0.0;
+      if(InpMinBodyATR > 0)
+        {
+         double sum = 0.0;
+         int cnt = 0;
+         for(int a = 1; a <= 14 && a < got; a++)
+           {
+            sum += (r[a].high - r[a].low);
+            cnt++;
+           }
+         if(cnt > 0)
+            minBody = (sum / cnt) * InpMinBodyATR;
+        }
+
+      // Only the most recent N A-shapes and N V-shapes of this timeframe are kept (like the original),
+      // scanning from the newest completed candle backwards. i is the SECOND candle of the pattern.
+      int maxPerType = MathMax(1, InpRecentPerType);
+      int foundA = 0, foundV = 0;
       for(int i = 1; i <= lookback && i + 1 < got; i++)
         {
+         if(foundA >= maxPerType && foundV >= maxPerType)
+            break;
+         double body1 = MathAbs(r[i + 1].close - r[i + 1].open);
+         double body2 = MathAbs(r[i].close - r[i].open);
+         if(body1 < minBody || body2 < minBody)
+            continue;
          bool bull1 = r[i + 1].close > r[i + 1].open;
          bool bear1 = r[i + 1].close < r[i + 1].open;
          bool bull2 = r[i].close > r[i].open;
          bool bear2 = r[i].close < r[i].open;
-         if(bull1 && bear2)
+         if(bull1 && bear2 && foundA < maxPerType)
            {
             // A-shape: peak formed by the bodies (bullish close / bearish open)
             double p = MathMax(r[i + 1].close, r[i].open);
             AddCandidate(arr, n, p, r[i].time, r[i].time + ps, tf, KIND_A);
+            foundA++;
            }
-         else if(bear1 && bull2)
+         else if(bear1 && bull2 && foundV < maxPerType)
            {
             // V-shape: valley formed by the bodies (bearish close / bullish open)
             double p = MathMin(r[i + 1].close, r[i].open);
             AddCandidate(arr, n, p, r[i].time, r[i].time + ps, tf, KIND_V);
+            foundV++;
            }
         }
      }
@@ -725,6 +754,7 @@ void DrawLevel(const int index, const SLevel &lv, const datetime endTime)
 
    if(ObjectFind(0, lname) < 0)
      {
+      g_levelObjectsCreated = true;
       ObjectCreate(0, lname, OBJ_TREND, 0, lv.start, lv.price, endTime, lv.price);
       ObjectSetInteger(0, lname, OBJPROP_RAY_RIGHT, false);
       ObjectSetInteger(0, lname, OBJPROP_RAY_LEFT, false);
@@ -752,6 +782,7 @@ void DrawLevel(const int index, const SLevel &lv, const datetime endTime)
      }
    if(ObjectFind(0, tname) < 0)
      {
+      g_levelObjectsCreated = true;
       ObjectCreate(0, tname, OBJ_TEXT, 0, endTime, lv.price);
       ObjectSetInteger(0, tname, OBJPROP_ANCHOR, ANCHOR_LEFT);
       ObjectSetInteger(0, tname, OBJPROP_BACK, false);
@@ -811,11 +842,17 @@ void Rebuild(const datetime lastBarTime, const double lastClose)
    SelectLevels(merged, mergedCount, refPrice, g_levels, shown);
 
    datetime endTime = lastBarTime + MathMax(1, InpExtendBars) * chartSeconds;
+   g_levelObjectsCreated = false;
    for(int i = 0; i < shown; i++)
       DrawLevel(i, g_levels[i], endTime);
    if(shown < g_drawnCount)
       RemoveStaleObjects(shown, g_drawnCount);
    g_drawnCount = shown;
+
+   // Chart objects are painted in creation order: re-create the table whenever new level
+   // objects appeared so the dashboard always stays on top of lines and labels.
+   if(g_levelObjectsCreated && InpShowTable)
+      RecreateTable();
   }
 
 //+------------------------------------------------------------------+
@@ -882,10 +919,14 @@ void PlaceRect(const string name, const int relY, const int height, const color 
       ObjectSetInteger(0, name, OBJPROP_BACK, false);
       ObjectSetInteger(0, name, OBJPROP_ZORDER, 0);
      }
+   // A rectangle label always grows to the right and downwards from its anchor point, so in
+   // right/lower corners the anchor must be placed at the far side of the table.
+   bool right = IsRightCorner();
    bool lower = IsLowerCorner();
-   int ydist = lower ? (InpTableY + TableHeight() - relY - height) : (InpTableY + relY);
+   int xdist = right ? (InpTableX + TBL_WIDTH) : InpTableX;
+   int ydist = lower ? (InpTableY + TableHeight() - relY) : (InpTableY + relY);
    ObjectSetInteger(0, name, OBJPROP_CORNER, InpTableCorner);
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, InpTableX);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, xdist);
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, ydist);
    ObjectSetInteger(0, name, OBJPROP_XSIZE, TBL_WIDTH);
    ObjectSetInteger(0, name, OBJPROP_YSIZE, height);
@@ -918,6 +959,17 @@ void CreateTable()
    PlaceText(TABLE_PREFIX + "DY_L", "Daily", TBL_PAD, y0 + 3 * TBL_ROW_H, false, CLR_TBL_LABEL);
    PlaceText(TABLE_PREFIX + "DY_V", "-", TBL_WIDTH - TBL_PAD, y0 + 3 * TBL_ROW_H, true, CLR_NEUTRAL);
    g_tableCreated = true;
+  }
+
+void RecreateTable()
+  {
+   ObjectsDeleteAll(0, TABLE_PREFIX);
+   g_tableCreated = false;
+   g_prevSession  = "";
+   g_prevWeekly   = "";
+   g_prevDaily    = "";
+   CreateTable();
+   UpdateTable();
   }
 
 string CurrentSession(color &clr)

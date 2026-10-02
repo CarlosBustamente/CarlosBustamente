@@ -32,6 +32,13 @@ Se escanean las velas **cerradas** de cada timeframe habilitado:
 Las líneas nacen en la segunda vela del patrón, igual que en el original, y se extienden hacia la
 derecha un número configurable de barras (`Extend lines to the right`).
 
+Para mantener el gráfico limpio, de cada timeframe sólo se conservan los **N A-shapes y N V-shapes
+más recientes** (`Recent A-shapes and V-shapes kept per timeframe`, 3 por defecto), que es el
+comportamiento que muestra el indicador original: en un gráfico de 5 minutos aparecen únicamente los
+dos o tres últimos niveles H1 de cada tipo, los últimos H4 y los diarios. El `lookback` sólo limita
+cuántas velas se escanean hacia atrás. Opcionalmente se pueden descartar patrones formados por velas
+minúsculas con `Min candle body (x ATR14 of the TF)` (p. ej. `0.2`).
+
 En gráficos de timeframe superior al nivel (p. ej. gráfico Diario) los niveles H4/H1 se ocultan,
 tal como ocurre en las capturas del indicador original.
 
@@ -114,7 +121,9 @@ como `Off-Market`.
 |-------|-----------|-------------|
 | STYLE | Theme Style | Light / Dark (color del texto de las etiquetas) |
 | TIMEFRAME TOGGLES | Show DAILY / H4 / H1 Levels | Activa cada timeframe |
-| DETECTION | Daily / H4 / H1 lookback | Velas escaneadas por timeframe |
+| DETECTION | Recent A-shapes and V-shapes kept per timeframe | Niveles recientes de cada tipo por TF (limpieza del gráfico) |
+| DETECTION | Daily / H4 / H1 lookback | Máximo de velas escaneadas por timeframe |
+| DETECTION | Min candle body (x ATR14) | Filtro opcional de cuerpos mínimos (0 = desactivado) |
 | DETECTION | Merge tolerance (%) / (points) | Distancia máxima para fusionar niveles |
 | OCL | Show Daily/H4/H1 OCL, lookbacks, colores, estilo | Configuración de niveles Open/Close |
 | LEVEL LIMITS | Max Resistance / Support Levels | Máximo de líneas por clase |
