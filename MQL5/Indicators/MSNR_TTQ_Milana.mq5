@@ -113,8 +113,9 @@ input group "=== LINE SETTINGS ==="
 input int               InpFreshWidth         = 2;             // Fresh Line Width
 input int               InpUnfreshWidth       = 1;             // Unfresh Line Width
 input int               InpUnfreshTransp      = 50;            // Unfresh Transparency (0-100)
-input int               InpExtendBars         = 20;            // Extend lines to the right (bars)
-input bool              InpAutoChartShift     = true;          // Enable chart shift so labels are visible
+input bool              InpRayRight           = true;          // Extend lines to the right edge (ray)
+input int               InpExtendBars         = 20;            // Extend lines to the right (bars, if not ray)
+input bool              InpAutoChartShift     = false;         // Enable chart shift on attach
 
 input group "=== LABEL SETTINGS ==="
 input bool              InpShowLabels         = true;          // Show labels
@@ -123,10 +124,12 @@ input bool              InpShowPrice          = false;         // Show Price
 input bool              InpShowTimeframe      = true;          // Show Timeframe
 input bool              InpShowType           = true;          // Show Type (A/V/OCL)
 input bool              InpShowStatus         = false;         // Show Status (dot = fresh, "=" = tested)
+input int               InpLabelMargin        = 4;             // Label distance from the right edge (px)
+input bool              InpAvoidOverlap       = true;          // Avoid overlapping labels
 
 input group "=== BIAS TABLE ==="
 input bool              InpShowTable          = true;          // Show Bias Table
-input ENUM_BASE_CORNER  InpTableCorner        = CORNER_RIGHT_UPPER; // Table corner
+input ENUM_BASE_CORNER  InpTableCorner        = CORNER_LEFT_UPPER; // Table corner
 input int               InpTableX             = 10;            // Table X offset (px)
 input int               InpTableY             = 25;            // Table Y offset (px)
 input string            InpTableTitle         = "MSNR by TTQxMilana"; // Table title
@@ -149,6 +152,7 @@ input string            InpNYKZ               = "07:00-10:00"; // New York Killz
 #define LINE_PREFIX     "MSNR_L_"
 #define LABEL_PREFIX    "MSNR_T_"
 #define TABLE_PREFIX    "MSNR_TBL_"
+#define LABEL_FONT      "Arial"
 
 #define KIND_A      1
 #define KIND_V      2
@@ -756,7 +760,7 @@ void DrawLevel(const int index, const SLevel &lv, const datetime endTime)
      {
       g_levelObjectsCreated = true;
       ObjectCreate(0, lname, OBJ_TREND, 0, lv.start, lv.price, endTime, lv.price);
-      ObjectSetInteger(0, lname, OBJPROP_RAY_RIGHT, false);
+      ObjectSetInteger(0, lname, OBJPROP_RAY_RIGHT, InpRayRight);
       ObjectSetInteger(0, lname, OBJPROP_RAY_LEFT, false);
       ObjectSetInteger(0, lname, OBJPROP_BACK, false);
       ObjectSetInteger(0, lname, OBJPROP_SELECTABLE, false);
@@ -780,23 +784,123 @@ void DrawLevel(const int index, const SLevel &lv, const datetime endTime)
       ObjectDelete(0, tname);
       return;
      }
+   // Labels are pixel-based objects pinned to the right edge of the visible chart area, so they
+   // stay visible no matter how far the chart is scrolled. Their Y is computed in PositionLabels().
    if(ObjectFind(0, tname) < 0)
      {
       g_levelObjectsCreated = true;
-      ObjectCreate(0, tname, OBJ_TEXT, 0, endTime, lv.price);
-      ObjectSetInteger(0, tname, OBJPROP_ANCHOR, ANCHOR_LEFT);
+      ObjectCreate(0, tname, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, tname, OBJPROP_CORNER, CORNER_RIGHT_UPPER);
+      ObjectSetInteger(0, tname, OBJPROP_ANCHOR, ANCHOR_RIGHT_UPPER);
       ObjectSetInteger(0, tname, OBJPROP_BACK, false);
       ObjectSetInteger(0, tname, OBJPROP_SELECTABLE, false);
       ObjectSetInteger(0, tname, OBJPROP_SELECTED, false);
       ObjectSetInteger(0, tname, OBJPROP_HIDDEN, true);
-      ObjectSetString(0, tname, OBJPROP_FONT, "Arial");
+      ObjectSetString(0, tname, OBJPROP_FONT, LABEL_FONT);
+      ObjectSetInteger(0, tname, OBJPROP_XDISTANCE, InpLabelMargin);
+      ObjectSetInteger(0, tname, OBJPROP_YDISTANCE, -100);
      }
-   else
-      ObjectMove(0, tname, 0, endTime, lv.price);
-   ObjectSetString(0, tname, OBJPROP_TEXT, " " + BuildLabel(lv));
+   ObjectSetString(0, tname, OBJPROP_TEXT, BuildLabel(lv));
    ObjectSetInteger(0, tname, OBJPROP_FONTSIZE, LabelFontSize());
    ObjectSetInteger(0, tname, OBJPROP_COLOR, LabelTextColor());
    ObjectSetString(0, tname, OBJPROP_TOOLTIP, tip);
+  }
+
+//+------------------------------------------------------------------+
+//| Places every level label at the right edge of the chart, just     |
+//| above its line, pushing labels apart when they would overlap.     |
+//+------------------------------------------------------------------+
+void PositionLabels()
+  {
+   if(!InpShowLabels || g_drawnCount <= 0)
+      return;
+
+   int chartHeight = (int)ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS, 0);
+   int firstBar    = (int)ChartGetInteger(0, CHART_FIRST_VISIBLE_BAR, 0);
+   datetime refTime = iTime(_Symbol, PERIOD_CURRENT, MathMax(0, firstBar));
+   if(refTime == 0)
+      refTime = TimeCurrent();
+
+   TextSetFont(LABEL_FONT, -LabelFontSize() * 10);
+
+   int    ys[], order[];
+   int    ws[], hs[];
+   ArrayResize(ys, g_drawnCount);
+   ArrayResize(order, g_drawnCount);
+   ArrayResize(ws, g_drawnCount);
+   ArrayResize(hs, g_drawnCount);
+
+   uint textW = 0, textH = 0;
+   int maxW = 0;
+   for(int i = 0; i < g_drawnCount; i++)
+     {
+      int x = 0, y = 0;
+      if(!ChartTimePriceToXY(0, 0, refTime, g_levels[i].price, x, y))
+         y = -10000;
+      ys[i]    = y;
+      order[i] = i;
+      string text = BuildLabel(g_levels[i]);
+      if(!TextGetSize(text, textW, textH))
+        {
+         textW = (uint)(StringLen(text) * 6);
+         textH = 12;
+        }
+      ws[i] = (int)textW;
+      hs[i] = (int)textH;
+      if(ws[i] > maxW)
+         maxW = ws[i];
+     }
+
+   // sort by vertical position (top of chart first)
+   for(int i = 1; i < g_drawnCount; i++)
+     {
+      int key = order[i];
+      int j = i - 1;
+      while(j >= 0 && ys[order[j]] > ys[key])
+        {
+         order[j + 1] = order[j];
+         j--;
+        }
+      order[j + 1] = key;
+     }
+
+   // two columns: labels that would collide in the first column move to a second column on the left,
+   // and if that one is busy as well they are pushed below the previous label
+   int bottomCol0 = -100000, bottomCol1 = -100000;
+   for(int k = 0; k < g_drawnCount; k++)
+     {
+      int i = order[k];
+      string tname = LABEL_PREFIX + IntegerToString(i);
+      if(ObjectFind(0, tname) < 0)
+         continue;
+
+      int h   = hs[i];
+      int top = ys[i] - h - 1;      // sit just above the line
+      int xdist = InpLabelMargin;
+      if(InpAvoidOverlap)
+        {
+         if(top < bottomCol0)
+           {
+            if(top >= bottomCol1)
+              {
+               xdist = InpLabelMargin + maxW + 6;
+               bottomCol1 = top + h;
+              }
+            else
+              {
+               top = bottomCol0;
+               bottomCol0 = top + h;
+              }
+           }
+         else
+            bottomCol0 = top + h;
+        }
+
+      bool visible = (ys[i] > -5000) && (top + h >= 0) && (top <= chartHeight);
+      ObjectSetInteger(0, tname, OBJPROP_TIMEFRAMES, visible ? OBJ_ALL_PERIODS : OBJ_NO_PERIODS);
+      ObjectSetInteger(0, tname, OBJPROP_XDISTANCE, xdist);
+      ObjectSetInteger(0, tname, OBJPROP_YDISTANCE, top);
+     }
   }
 
 void RemoveStaleObjects(const int fromIndex, const int toIndex)
@@ -853,6 +957,8 @@ void Rebuild(const datetime lastBarTime, const double lastClose)
    // objects appeared so the dashboard always stays on top of lines and labels.
    if(g_levelObjectsCreated && InpShowTable)
       RecreateTable();
+
+   PositionLabels();
   }
 
 //+------------------------------------------------------------------+
@@ -1104,6 +1210,8 @@ void OnDeinit(const int reason)
 void OnTimer()
   {
    UpdateTable();
+   // keeps labels glued to the right edge even when there are no ticks (weekend / scroll)
+   PositionLabels();
   }
 
 int OnCalculate(const int rates_total,
@@ -1143,8 +1251,9 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
   {
    if(id == CHARTEVENT_CHART_CHANGE)
      {
-      // background color may have changed (theme), recompute colors on next tick
+      // scroll / zoom / resize / scale change: re-pin the labels and refresh colors on next tick
       g_lastRebuild = 0;
+      PositionLabels();
       ChartRedraw(0);
      }
   }

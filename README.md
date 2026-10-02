@@ -14,9 +14,10 @@ Archivo: `MQL5/Indicators/MSNR_TTQ_Milana.mq5`
 3. En MetaEditor, abre el archivo y pulsa **Compilar** (F7).
 4. En MT5, arrastra el indicador `MSNR_TTQ_Milana` al gráfico (recomendado M15, M30 o H1).
 
-> El indicador activa automáticamente el *desplazamiento del gráfico* (chart shift) para que las
-> etiquetas, que se dibujan al final de las líneas, queden visibles. Se puede desactivar con
-> `Enable chart shift so labels are visible`.
+> Las etiquetas de los niveles se dibujan en píxeles, pegadas al **borde derecho del área visible**
+> y justo encima de su línea, por lo que siempre están a la vista aunque desplaces el gráfico hacia
+> la izquierda o cambies de zoom. Las líneas se prolongan como rayo hasta el borde derecho
+> (`Extend lines to the right edge (ray)`).
 
 ## Lógica replicada
 
@@ -88,11 +89,16 @@ Se conservan las más cercanas al precio actual (o las más recientes, según
 * `Show Timeframe`, `Show Type (A/V/OCL)`, `Show Price`, `Show Status` (● fresh, `=` tested).
 * `Label Size`: Tiny / Small / Normal / Large / Huge.
 * `Theme Style`: **Light** → texto oscuro, **Dark** → texto blanco.
+* `Avoid overlapping labels`: cuando dos niveles están muy juntos, la segunda etiqueta se desplaza
+  a una columna a la izquierda (o se baja ligeramente) para que ambas sean legibles.
+* `Label distance from the right edge (px)`: margen respecto a la escala de precios.
+* Las etiquetas se reposicionan automáticamente al hacer scroll, zoom o cambiar el tamaño del gráfico
+  y se ocultan sólo si su nivel queda fuera del rango de precios visible.
 
 ### 7. Tabla Bias / Storyline
 
-Panel en la esquina elegida (por defecto superior derecha), siempre con estilo oscuro como el
-original:
+Panel en la esquina elegida (por defecto **superior izquierda**, para dejar libre la zona derecha
+donde están las etiquetas y el precio actual), siempre con estilo oscuro como el original:
 
 | Fila | Contenido |
 |------|-----------|
