@@ -88,25 +88,39 @@ Se conservan las más cercanas al precio actual (o las más recientes, según
 
 * `Show Timeframe`, `Show Type (A/V/OCL)`, `Show Price`, `Show Status` (● fresh, `=` tested).
 * `Label Size`: Tiny / Small / Normal / Large / Huge.
-* `Theme Style`: **Light** → texto oscuro, **Dark** → texto blanco.
+* `Label font`: por defecto **Arial Black** (también funcionan `Segoe UI Black`, `Impact`, `Arial Bold`...).
+* `Label color`: **Same color as the level line** (por defecto, cada etiqueta hereda el color de su
+  línea) o **Theme color**.
+* `Theme Style`: **Light** → texto oscuro, **Dark** → texto blanco (solo con `Label color = Theme`).
 * `Avoid overlapping labels`: cuando dos niveles están muy juntos, la segunda etiqueta se desplaza
   a una columna a la izquierda (o se baja ligeramente) para que ambas sean legibles.
 * `Label distance from the right edge (px)`: margen respecto a la escala de precios.
 * Las etiquetas se reposicionan automáticamente al hacer scroll, zoom o cambiar el tamaño del gráfico
   y se ocultan sólo si su nivel queda fuera del rango de precios visible.
 
-### 7. Tabla Bias / Storyline
+### 7. Panel Bias / Storyline (canvas)
 
-Panel en la esquina elegida (por defecto **superior izquierda**, para dejar libre la zona derecha
-donde están las etiquetas y el precio actual), siempre con estilo oscuro como el original:
+Panel dibujado con `CCanvas` (fondo redondeado semitransparente, cabecera azul) en la esquina
+elegida (por defecto **superior izquierda**, para dejar libre la zona derecha donde están las
+etiquetas y el precio actual):
 
 | Fila | Contenido |
 |------|-----------|
-| Cabecera | `MSNR by TTQxMilana` (texto configurable) |
+| Cabecera | `MSNR by TTQxMilana` (texto configurable) + botón de colapsar |
 | Session | `Asia`, `Asia KZ`, `London`, `London KZ`, `New York`, `New York KZ` u `Off-Market` |
-| ══ STORYLINE ══ | separador (texto configurable, p. ej. `BIAS`) |
+| ── STORYLINE ── | separador (texto configurable, p. ej. `BIAS`) |
 | Weekly | `BULLISH` si el precio está por encima del open semanal, `BEARISH` si está por debajo |
 | Daily | igual con el open diario |
+| Botones | `ALL` / `H1` / `H4` / `D`: filtran los niveles mostrados por timeframe |
+
+Interacción:
+
+* **Clic en la cabecera** → colapsa/expande el panel (solo queda la cabecera).
+* **Tecla `P`** (configurable con `Key code to hide/show the panel`) → oculta o muestra el panel
+  por completo. El gráfico debe tener el foco (haz clic sobre él antes).
+* **Botones de timeframe** → `ALL` muestra todo; `H1`, `H4` o `D` muestran únicamente los niveles
+  que contienen ese timeframe (los niveles fusionados aparecen si alguno de sus componentes coincide).
+* `Start collapsed` arranca el panel colapsado.
 
 Sesiones y killzones se definen en **hora de Nueva York** (`HH:MM-HH:MM`) y son editables:
 
@@ -136,7 +150,7 @@ como `Off-Market`.
 | COLORS | Daily / H4 / H1 Resistance & Support | Colores de las líneas A / V |
 | LINE SETTINGS | Fresh / Unfresh width, transparency, extensión | Estética de las líneas |
 | LABEL SETTINGS | Show labels, size, price, timeframe, type, status | Contenido de las etiquetas |
-| BIAS TABLE | Show, corner, offsets, title, storyline text | Panel de sesión y storyline |
+| DASHBOARD PANEL | Show, start collapsed, corner, offsets, title, storyline text, toggle key | Panel canvas con botones de timeframe |
 | SESSIONS | Rangos de sesión/killzone y modo horario | Cálculo de la fila *Session* |
 
 ## Notas técnicas

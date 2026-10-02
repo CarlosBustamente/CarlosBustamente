@@ -18,6 +18,8 @@
 #property indicator_plots   0
 #property indicator_buffers 0
 
+#include <Canvas\Canvas.mqh>
+
 //+------------------------------------------------------------------+
 //| Enumerations                                                      |
 //+------------------------------------------------------------------+
@@ -46,6 +48,12 @@ enum ENUM_LEVEL_SELECT
   {
    SELECT_NEAREST = 0, // Nearest to current price
    SELECT_RECENT  = 1  // Most recent
+  };
+
+enum ENUM_LABEL_COLOR
+  {
+   LABEL_COLOR_LINE  = 0, // Same color as the level line
+   LABEL_COLOR_THEME = 1  // Theme color (dark / white)
   };
 
 enum ENUM_OCL_STYLE
@@ -126,14 +134,18 @@ input bool              InpShowType           = true;          // Show Type (A/V
 input bool              InpShowStatus         = false;         // Show Status (dot = fresh, "=" = tested)
 input int               InpLabelMargin        = 4;             // Label distance from the right edge (px)
 input bool              InpAvoidOverlap       = true;          // Avoid overlapping labels
+input string            InpLabelFont          = "Arial Black"; // Label font (Arial Black, Segoe UI Black, Impact...)
+input ENUM_LABEL_COLOR  InpLabelColorMode     = LABEL_COLOR_LINE; // Label color
 
-input group "=== BIAS TABLE ==="
-input bool              InpShowTable          = true;          // Show Bias Table
-input ENUM_BASE_CORNER  InpTableCorner        = CORNER_LEFT_UPPER; // Table corner
-input int               InpTableX             = 10;            // Table X offset (px)
-input int               InpTableY             = 25;            // Table Y offset (px)
-input string            InpTableTitle         = "MSNR by TTQxMilana"; // Table title
+input group "=== DASHBOARD PANEL ==="
+input bool              InpShowTable          = true;          // Show panel
+input bool              InpPanelCollapsed     = false;         // Start collapsed (header only)
+input ENUM_BASE_CORNER  InpTableCorner        = CORNER_LEFT_UPPER; // Panel corner
+input int               InpTableX             = 10;            // Panel X offset (px)
+input int               InpTableY             = 25;            // Panel Y offset (px)
+input string            InpTableTitle         = "MSNR by TTQxMilana"; // Panel title
 input string            InpStorylineTitle     = "STORYLINE";    // Storyline separator text (BIAS, STORYLINE...)
+input int               InpToggleKey          = 80;            // Key code to hide/show the panel (80 = P)
 
 input group "=== SESSIONS (New York time, HH:MM-HH:MM) ==="
 input ENUM_TIME_MODE    InpTimeMode           = TIME_AUTO_GMT; // Time conversion mode
@@ -151,9 +163,6 @@ input string            InpNYKZ               = "07:00-10:00"; // New York Killz
 #define OBJ_PREFIX      "MSNR_"
 #define LINE_PREFIX     "MSNR_L_"
 #define LABEL_PREFIX    "MSNR_T_"
-#define TABLE_PREFIX    "MSNR_TBL_"
-#define LABEL_FONT      "Arial"
-
 #define KIND_A      1
 #define KIND_V      2
 #define KIND_OCL_O  3
@@ -163,21 +172,18 @@ input string            InpNYKZ               = "07:00-10:00"; // New York Killz
 #define TF_BIT_H4   2
 #define TF_BIT_D1   4
 
-// Table geometry (pixels)
-#define TBL_WIDTH        150
-#define TBL_HEADER_H     20
-#define TBL_ROW_H        16
-#define TBL_PAD          6
-#define TBL_FONT         "Arial"
-#define TBL_FONT_SIZE    8
+// Canvas panel geometry (pixels)
+#define PANEL_NAME       "MSNR_PANEL"
+#define PNL_W            210
+#define PNL_HDR_H        28
+#define PNL_ROW_H        21
+#define PNL_BTN_ROW_H    34
+#define PNL_BTN_H        24
+#define PNL_PAD          12
+#define PNL_BODY_PAD     4
+#define PNL_RADIUS       9
 
-// Table colors (dashboard is always dark, like the original)
-#define CLR_TBL_BG        C'30,34,45'
-#define CLR_TBL_BORDER    C'54,58,69'
-#define CLR_TBL_HEADER    C'41,98,255'
-#define CLR_TBL_TITLE     clrWhite
-#define CLR_TBL_LABEL     C'178,181,190'
-#define CLR_TBL_STORY     C'255,213,79'
+// Dashboard colors (always dark, like the original)
 #define CLR_BULL          C'0,230,118'
 #define CLR_BEAR          C'255,82,82'
 #define CLR_NEUTRAL       C'158,158,158'
@@ -228,11 +234,27 @@ int           g_drawnCount     = 0;
 datetime      g_lastRebuild    = 0;
 datetime      g_lastChartBar   = 0;
 bool          g_dataMissing    = false;
-bool          g_tableCreated   = false;
 bool          g_levelObjectsCreated = false;
 SSessionRange g_asia, g_asiaKZ, g_london, g_londonKZ, g_ny, g_nyKZ;
 
-// cached table state to avoid redundant object updates
+// last chart bar seen by OnCalculate (used to rebuild from UI events)
+datetime      g_lastBarTime    = 0;
+double        g_lastClose      = 0.0;
+
+// canvas panel state
+CCanvas       g_canvas;
+bool          g_panelReady     = false;
+bool          g_panelVisible   = true;
+bool          g_panelCollapsed = false;
+int           g_panelX         = 0;
+int           g_panelY         = 0;
+int           g_tfFilter       = 0;        // 0 = all timeframes, otherwise a TF_BIT_* mask
+int           g_mouseX         = 0;
+int           g_mouseY         = 0;
+bool          g_mouseDown      = false;
+uint          g_lastClickTick  = 0;
+
+// cached panel values to avoid redundant repaints
 string        g_prevSession    = "";
 string        g_prevWeekly     = "";
 string        g_prevDaily      = "";
@@ -404,6 +426,11 @@ int LabelFontSize()
       case LBL_HUGE:   return(14);
      }
    return(8);
+  }
+
+string LabelFontName()
+  {
+   return(InpLabelFont == "" ? "Arial Black" : InpLabelFont);
   }
 
 color LabelTextColor()
@@ -680,6 +707,8 @@ void SelectLevels(SLevel &all[], const int count, const double refPrice, SLevel 
      {
       if(InpHideBroken && all[i].broken)
          continue;
+      if(g_tfFilter != 0 && (all[i].tfMask & g_tfFilter) == 0)   // panel timeframe filter
+         continue;
       bool isRes = (all[i].primaryShape > 0) || (all[i].primaryShape == 0 && all[i].price >= refPrice);
       if(isRes) resIdx[nr++] = i;
       else      supIdx[ns++] = i;
@@ -745,6 +774,7 @@ void DrawLevel(const int index, const SLevel &lv, const datetime endTime)
       clr   = ShapeColor(lv.tfMask, lv.primaryShape >= 0);
       style = STYLE_SOLID;
      }
+   color labelClr = (InpLabelColorMode == LABEL_COLOR_LINE) ? clr : LabelTextColor();
    if(lv.fresh)
       width = MathMax(1, InpFreshWidth);
    else
@@ -796,13 +826,13 @@ void DrawLevel(const int index, const SLevel &lv, const datetime endTime)
       ObjectSetInteger(0, tname, OBJPROP_SELECTABLE, false);
       ObjectSetInteger(0, tname, OBJPROP_SELECTED, false);
       ObjectSetInteger(0, tname, OBJPROP_HIDDEN, true);
-      ObjectSetString(0, tname, OBJPROP_FONT, LABEL_FONT);
+      ObjectSetString(0, tname, OBJPROP_FONT, LabelFontName());
       ObjectSetInteger(0, tname, OBJPROP_XDISTANCE, InpLabelMargin);
       ObjectSetInteger(0, tname, OBJPROP_YDISTANCE, -100);
      }
    ObjectSetString(0, tname, OBJPROP_TEXT, BuildLabel(lv));
    ObjectSetInteger(0, tname, OBJPROP_FONTSIZE, LabelFontSize());
-   ObjectSetInteger(0, tname, OBJPROP_COLOR, LabelTextColor());
+   ObjectSetInteger(0, tname, OBJPROP_COLOR, labelClr);
    ObjectSetString(0, tname, OBJPROP_TOOLTIP, tip);
   }
 
@@ -821,7 +851,7 @@ void PositionLabels()
    if(refTime == 0)
       refTime = TimeCurrent();
 
-   TextSetFont(LABEL_FONT, -LabelFontSize() * 10);
+   TextSetFont(LabelFontName(), -LabelFontSize() * 10, FW_BOLD);
 
    int    ys[], order[];
    int    ws[], hs[];
@@ -953,129 +983,12 @@ void Rebuild(const datetime lastBarTime, const double lastClose)
       RemoveStaleObjects(shown, g_drawnCount);
    g_drawnCount = shown;
 
-   // Chart objects are painted in creation order: re-create the table whenever new level
+   // Chart objects are painted in creation order: re-create the panel whenever new level
    // objects appeared so the dashboard always stays on top of lines and labels.
    if(g_levelObjectsCreated && InpShowTable)
-      RecreateTable();
+      PanelRecreate();
 
    PositionLabels();
-  }
-
-//+------------------------------------------------------------------+
-//| Bias table                                                        |
-//+------------------------------------------------------------------+
-bool IsRightCorner()
-  {
-   return(InpTableCorner == CORNER_RIGHT_UPPER || InpTableCorner == CORNER_RIGHT_LOWER);
-  }
-
-bool IsLowerCorner()
-  {
-   return(InpTableCorner == CORNER_LEFT_LOWER || InpTableCorner == CORNER_RIGHT_LOWER);
-  }
-
-int TableHeight()
-  {
-   return(TBL_HEADER_H + 4 * TBL_ROW_H + 4);
-  }
-
-// Places a label at table-relative coordinates. relX is measured from the table's left edge,
-// relY from the table's top edge. alignRight anchors the text on its right side.
-void PlaceText(const string name, const string text, const int relX, const int relY,
-               const bool alignRight, const color clr, const bool bold = false)
-  {
-   if(ObjectFind(0, name) < 0)
-     {
-      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
-      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
-      ObjectSetInteger(0, name, OBJPROP_SELECTED, false);
-      ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
-      ObjectSetInteger(0, name, OBJPROP_BACK, false);
-      ObjectSetInteger(0, name, OBJPROP_ZORDER, 10);
-     }
-   bool right = IsRightCorner();
-   bool lower = IsLowerCorner();
-   int xdist = right ? (InpTableX + TBL_WIDTH - relX) : (InpTableX + relX);
-   int ydist = lower ? (InpTableY + TableHeight() - relY - TBL_ROW_H) : (InpTableY + relY);
-
-   ENUM_ANCHOR_POINT anchor;
-   if(alignRight)
-      anchor = lower ? ANCHOR_RIGHT_LOWER : ANCHOR_RIGHT_UPPER;
-   else
-      anchor = lower ? ANCHOR_LEFT_LOWER : ANCHOR_LEFT_UPPER;
-
-   ObjectSetInteger(0, name, OBJPROP_CORNER, InpTableCorner);
-   ObjectSetInteger(0, name, OBJPROP_ANCHOR, anchor);
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, xdist);
-   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, ydist);
-   ObjectSetString(0, name, OBJPROP_FONT, bold ? "Arial Bold" : TBL_FONT);
-   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, TBL_FONT_SIZE);
-   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
-   ObjectSetString(0, name, OBJPROP_TEXT, text);
-  }
-
-void PlaceRect(const string name, const int relY, const int height, const color bg, const color border)
-  {
-   if(ObjectFind(0, name) < 0)
-     {
-      ObjectCreate(0, name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
-      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
-      ObjectSetInteger(0, name, OBJPROP_SELECTED, false);
-      ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
-      ObjectSetInteger(0, name, OBJPROP_BACK, false);
-      ObjectSetInteger(0, name, OBJPROP_ZORDER, 0);
-     }
-   // A rectangle label always grows to the right and downwards from its anchor point, so in
-   // right/lower corners the anchor must be placed at the far side of the table.
-   bool right = IsRightCorner();
-   bool lower = IsLowerCorner();
-   int xdist = right ? (InpTableX + TBL_WIDTH) : InpTableX;
-   int ydist = lower ? (InpTableY + TableHeight() - relY) : (InpTableY + relY);
-   ObjectSetInteger(0, name, OBJPROP_CORNER, InpTableCorner);
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, xdist);
-   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, ydist);
-   ObjectSetInteger(0, name, OBJPROP_XSIZE, TBL_WIDTH);
-   ObjectSetInteger(0, name, OBJPROP_YSIZE, height);
-   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bg);
-   ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
-   ObjectSetInteger(0, name, OBJPROP_COLOR, border);
-   ObjectSetInteger(0, name, OBJPROP_WIDTH, 1);
-  }
-
-void CreateTable()
-  {
-   if(!InpShowTable)
-      return;
-   PlaceRect(TABLE_PREFIX + "BG", 0, TableHeight(), CLR_TBL_BG, CLR_TBL_BORDER);
-   PlaceRect(TABLE_PREFIX + "HDR", 0, TBL_HEADER_H, CLR_TBL_HEADER, CLR_TBL_HEADER);
-   PlaceText(TABLE_PREFIX + "TITLE", InpTableTitle, TBL_PAD, 3, false, CLR_TBL_TITLE, true);
-
-   int y0 = TBL_HEADER_H + 2;
-   PlaceText(TABLE_PREFIX + "SES_L", "Session", TBL_PAD, y0, false, CLR_TBL_LABEL);
-   PlaceText(TABLE_PREFIX + "SES_V", "-", TBL_WIDTH - TBL_PAD, y0, true, CLR_SES_OFF);
-
-   // separator row, centered: anchor the text at the middle of the table (U+2550 = double horizontal bar)
-   string bars  = ShortToString(0x2550) + ShortToString(0x2550);
-   string story = bars + " " + InpStorylineTitle + " " + bars;
-   PlaceText(TABLE_PREFIX + "STORY", story, TBL_WIDTH / 2, y0 + TBL_ROW_H, false, CLR_TBL_STORY);
-   ObjectSetInteger(0, TABLE_PREFIX + "STORY", OBJPROP_ANCHOR, IsLowerCorner() ? ANCHOR_LOWER : ANCHOR_UPPER);
-
-   PlaceText(TABLE_PREFIX + "WK_L", "Weekly", TBL_PAD, y0 + 2 * TBL_ROW_H, false, CLR_TBL_LABEL);
-   PlaceText(TABLE_PREFIX + "WK_V", "-", TBL_WIDTH - TBL_PAD, y0 + 2 * TBL_ROW_H, true, CLR_NEUTRAL);
-   PlaceText(TABLE_PREFIX + "DY_L", "Daily", TBL_PAD, y0 + 3 * TBL_ROW_H, false, CLR_TBL_LABEL);
-   PlaceText(TABLE_PREFIX + "DY_V", "-", TBL_WIDTH - TBL_PAD, y0 + 3 * TBL_ROW_H, true, CLR_NEUTRAL);
-   g_tableCreated = true;
-  }
-
-void RecreateTable()
-  {
-   ObjectsDeleteAll(0, TABLE_PREFIX);
-   g_tableCreated = false;
-   g_prevSession  = "";
-   g_prevWeekly   = "";
-   g_prevDaily    = "";
-   CreateTable();
-   UpdateTable();
   }
 
 string CurrentSession(color &clr)
@@ -1122,47 +1035,285 @@ string Storyline(const ENUM_TIMEFRAMES tf, const double price, color &clr)
    return("NEUTRAL");
   }
 
+//+------------------------------------------------------------------+
+//| Canvas dashboard                                                  |
+//| Rounded semi-transparent panel drawn with CCanvas: session,       |
+//| storyline and timeframe filter buttons (ALL / H1 / H4 / D).       |
+//| Click on the header to collapse/expand, press the toggle key to   |
+//| hide/show the whole panel.                                        |
+//+------------------------------------------------------------------+
+uint ToARGB(const color c, const int alpha = 255)
+  {
+   return(ColorToARGB(c, (uchar)MathMax(0, MathMin(255, alpha))));
+  }
+
+int PanelHeight()
+  {
+   if(g_panelCollapsed)
+      return(PNL_HDR_H);
+   return(PNL_HDR_H + PNL_BODY_PAD + 4 * PNL_ROW_H + PNL_BTN_ROW_H + PNL_BODY_PAD);
+  }
+
+// absolute pixel position of the panel's upper-left corner, derived from the configured corner
+void PanelComputePosition()
+  {
+   int chartW = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS, 0);
+   int chartH = (int)ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS, 0);
+   int h = PanelHeight();
+   bool right = (InpTableCorner == CORNER_RIGHT_UPPER || InpTableCorner == CORNER_RIGHT_LOWER);
+   bool lower = (InpTableCorner == CORNER_LEFT_LOWER  || InpTableCorner == CORNER_RIGHT_LOWER);
+   g_panelX = right ? (chartW - InpTableX - PNL_W) : InpTableX;
+   g_panelY = lower ? (chartH - InpTableY - h) : InpTableY;
+   if(g_panelX < 0) g_panelX = 0;
+   if(g_panelY < 0) g_panelY = 0;
+  }
+
+void FillRoundRect(const int x1, const int y1, const int x2, const int y2, const int r, const uint clr)
+  {
+   g_canvas.FillRectangle(x1 + r, y1, x2 - r, y2, clr);
+   g_canvas.FillRectangle(x1, y1 + r, x1 + r, y2 - r, clr);
+   g_canvas.FillRectangle(x2 - r, y1 + r, x2, y2 - r, clr);
+   g_canvas.FillCircle(x1 + r, y1 + r, r, clr);
+   g_canvas.FillCircle(x2 - r, y1 + r, r, clr);
+   g_canvas.FillCircle(x1 + r, y2 - r, r, clr);
+   g_canvas.FillCircle(x2 - r, y2 - r, r, clr);
+  }
+
+bool PanelCreate()
+  {
+   if(!InpShowTable)
+      return(false);
+   PanelComputePosition();
+   int h = PanelHeight();
+   if(!g_canvas.CreateBitmapLabel(0, 0, PANEL_NAME, g_panelX, g_panelY, PNL_W, h, COLOR_FORMAT_ARGB_NORMALIZE))
+     {
+      Print("MSNR: cannot create canvas panel, error ", GetLastError());
+      return(false);
+     }
+   ObjectSetInteger(0, PANEL_NAME, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, PANEL_NAME, OBJPROP_ANCHOR, ANCHOR_LEFT_UPPER);
+   ObjectSetInteger(0, PANEL_NAME, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, PANEL_NAME, OBJPROP_SELECTED, false);
+   ObjectSetInteger(0, PANEL_NAME, OBJPROP_HIDDEN, true);
+   ObjectSetInteger(0, PANEL_NAME, OBJPROP_BACK, false);
+   ObjectSetInteger(0, PANEL_NAME, OBJPROP_TIMEFRAMES, g_panelVisible ? OBJ_ALL_PERIODS : OBJ_NO_PERIODS);
+   g_panelReady = true;
+   PanelDraw();
+   return(true);
+  }
+
+void PanelDestroy()
+  {
+   if(g_panelReady)
+      g_canvas.Destroy();
+   ObjectDelete(0, PANEL_NAME);
+   g_panelReady = false;
+  }
+
+// re-created so that it is painted above level lines/labels (objects are drawn in creation order)
+void PanelRecreate()
+  {
+   PanelDestroy();
+   PanelCreate();
+  }
+
+void PanelApplyGeometry()
+  {
+   if(!g_panelReady)
+      return;
+   PanelComputePosition();
+   int h = PanelHeight();
+   if(g_canvas.Height() != h)
+      g_canvas.Resize(PNL_W, h);
+   ObjectSetInteger(0, PANEL_NAME, OBJPROP_XDISTANCE, g_panelX);
+   ObjectSetInteger(0, PANEL_NAME, OBJPROP_YDISTANCE, g_panelY);
+  }
+
+void PanelButtonRect(const int index, int &x1, int &y1, int &x2, int &y2)
+  {
+   int rowTop = PNL_HDR_H + PNL_BODY_PAD + 4 * PNL_ROW_H;
+   int gap    = 6;
+   int bw     = (PNL_W - 2 * PNL_PAD - 3 * gap) / 4;
+   x1 = PNL_PAD + index * (bw + gap);
+   x2 = x1 + bw - 1;
+   y1 = rowTop + (PNL_BTN_ROW_H - PNL_BTN_H) / 2;
+   y2 = y1 + PNL_BTN_H - 1;
+  }
+
+void PanelDraw()
+  {
+   if(!g_panelReady)
+      return;
+
+   int w = PNL_W;
+   int h = PanelHeight();
+   g_canvas.Erase(0);   // fully transparent
+
+   // body
+   FillRoundRect(0, 0, w - 1, h - 1, PNL_RADIUS, ToARGB(C'22,26,36', 235));
+   // header (rounded top, squared bottom when expanded) with a soft two-tone gradient
+   FillRoundRect(0, 0, w - 1, PNL_HDR_H - 1, PNL_RADIUS, ToARGB(C'41,98,255'));
+   if(!g_panelCollapsed)
+      g_canvas.FillRectangle(0, PNL_HDR_H - PNL_RADIUS, w - 1, PNL_HDR_H - 1, ToARGB(C'41,98,255'));
+   g_canvas.FillRectangle(0, PNL_HDR_H / 2, w - 1, PNL_HDR_H - 1 - (g_panelCollapsed ? PNL_RADIUS : 0), ToARGB(C'33,84,230'));
+   if(!g_panelCollapsed)
+      g_canvas.FillRectangle(0, PNL_HDR_H - 1, w - 1, PNL_HDR_H - 1, ToARGB(C'80,130,255'));
+
+   // title + collapse button
+   g_canvas.FontSet("Segoe UI", -100, FW_BOLD);
+   g_canvas.TextOut(PNL_PAD, PNL_HDR_H / 2, InpTableTitle, ToARGB(clrWhite), TA_LEFT | TA_VCENTER);
+   int bx = w - PNL_PAD - 8, by = PNL_HDR_H / 2;
+   g_canvas.FillCircle(bx, by, 8, ToARGB(C'20,55,170'));
+   g_canvas.FillRectangle(bx - 4, by - 1, bx + 4, by, ToARGB(clrWhite));
+   if(g_panelCollapsed)
+      g_canvas.FillRectangle(bx - 1, by - 4, bx, by + 4, ToARGB(clrWhite));
+
+   if(!g_panelCollapsed)
+     {
+      double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      if(price <= 0)
+         price = iClose(_Symbol, PERIOD_CURRENT, 0);
+      color cs, cw, cd;
+      string ses = CurrentSession(cs);
+      string wk  = Storyline(PERIOD_W1, price, cw);
+      string dy  = Storyline(PERIOD_D1, price, cd);
+
+      int y = PNL_HDR_H + PNL_BODY_PAD;
+      uint clrLabel = ToARGB(C'170,176,190');
+
+      // Session row: value inside a colored pill
+      g_canvas.FontSet("Segoe UI", -90, FW_NORMAL);
+      g_canvas.TextOut(PNL_PAD, y + PNL_ROW_H / 2, "Session", clrLabel, TA_LEFT | TA_VCENTER);
+      g_canvas.FontSet("Segoe UI", -90, FW_BOLD);
+      int tw = g_canvas.TextWidth(ses);
+      int px2 = w - PNL_PAD, px1 = px2 - tw - 14;
+      FillRoundRect(px1, y + 2, px2, y + PNL_ROW_H - 3, 7, ToARGB(cs, 60));
+      g_canvas.TextOut(px2 - 7, y + PNL_ROW_H / 2, ses, ToARGB(cs), TA_RIGHT | TA_VCENTER);
+      y += PNL_ROW_H;
+
+      // Storyline separator
+      g_canvas.FontSet("Segoe UI", -80, FW_BOLD);
+      string story = InpStorylineTitle;
+      StringToUpper(story);
+      int sw = g_canvas.TextWidth(story);
+      int cx = w / 2, cy = y + PNL_ROW_H / 2;
+      uint gold = ToARGB(C'255,213,79');
+      g_canvas.Line(PNL_PAD, cy, cx - sw / 2 - 8, cy, ToARGB(C'255,213,79', 140));
+      g_canvas.Line(cx + sw / 2 + 8, cy, w - PNL_PAD - 1, cy, ToARGB(C'255,213,79', 140));
+      g_canvas.TextOut(cx, cy, story, gold, TA_CENTER | TA_VCENTER);
+      y += PNL_ROW_H;
+
+      // Weekly / Daily rows
+      g_canvas.FontSet("Segoe UI", -90, FW_NORMAL);
+      g_canvas.TextOut(PNL_PAD, y + PNL_ROW_H / 2, "Weekly", clrLabel, TA_LEFT | TA_VCENTER);
+      g_canvas.FontSet("Segoe UI", -90, FW_BOLD);
+      g_canvas.TextOut(w - PNL_PAD, y + PNL_ROW_H / 2, wk, ToARGB(cw), TA_RIGHT | TA_VCENTER);
+      y += PNL_ROW_H;
+      g_canvas.FontSet("Segoe UI", -90, FW_NORMAL);
+      g_canvas.TextOut(PNL_PAD, y + PNL_ROW_H / 2, "Daily", clrLabel, TA_LEFT | TA_VCENTER);
+      g_canvas.FontSet("Segoe UI", -90, FW_BOLD);
+      g_canvas.TextOut(w - PNL_PAD, y + PNL_ROW_H / 2, dy, ToARGB(cd), TA_RIGHT | TA_VCENTER);
+      y += PNL_ROW_H;
+
+      // Timeframe filter buttons
+      string names[4];
+      names[0] = "ALL"; names[1] = "H1"; names[2] = "H4"; names[3] = "D";
+      int masks[4];
+      masks[0] = 0; masks[1] = TF_BIT_H1; masks[2] = TF_BIT_H4; masks[3] = TF_BIT_D1;
+      g_canvas.FontSet("Segoe UI", -85, FW_BOLD);
+      for(int i = 0; i < 4; i++)
+        {
+         int x1, y1, x2, y2;
+         PanelButtonRect(i, x1, y1, x2, y2);
+         bool active = (g_tfFilter == masks[i]);
+         if(active)
+           {
+            FillRoundRect(x1, y1, x2, y2, 5, ToARGB(C'41,98,255'));
+            FillRoundRect(x1, y1, x2, y1 + (y2 - y1) / 2, 5, ToARGB(C'62,116,255'));
+            g_canvas.FillRectangle(x1, y1 + 5, x2, y1 + (y2 - y1) / 2, ToARGB(C'62,116,255'));
+           }
+         else
+            FillRoundRect(x1, y1, x2, y2, 5, ToARGB(C'44,50,66'));
+         g_canvas.TextOut((x1 + x2) / 2, (y1 + y2) / 2 + 1, names[i],
+                          active ? ToARGB(clrWhite) : ToARGB(C'190,196,210'), TA_CENTER | TA_VCENTER);
+        }
+     }
+
+   g_canvas.Update(false);
+  }
+
+void PanelSetVisible(const bool visible)
+  {
+   g_panelVisible = visible;
+   if(g_panelReady)
+      ObjectSetInteger(0, PANEL_NAME, OBJPROP_TIMEFRAMES, visible ? OBJ_ALL_PERIODS : OBJ_NO_PERIODS);
+  }
+
+// returns true when the click was consumed by the panel
+bool PanelHandleClick(const int x, const int y)
+  {
+   if(!g_panelReady || !g_panelVisible)
+      return(false);
+   int px = x - g_panelX;
+   int py = y - g_panelY;
+   if(px < 0 || py < 0 || px >= PNL_W || py >= PanelHeight())
+      return(false);
+
+   if(py < PNL_HDR_H)
+     {
+      g_panelCollapsed = !g_panelCollapsed;
+      PanelApplyGeometry();
+      PanelDraw();
+      return(true);
+     }
+   if(!g_panelCollapsed)
+     {
+      int masks[4];
+      masks[0] = 0; masks[1] = TF_BIT_H1; masks[2] = TF_BIT_H4; masks[3] = TF_BIT_D1;
+      for(int i = 0; i < 4; i++)
+        {
+         int x1, y1, x2, y2;
+         PanelButtonRect(i, x1, y1, x2, y2);
+         if(px >= x1 && px <= x2 && py >= y1 && py <= y2)
+           {
+            g_tfFilter = masks[i];
+            if(g_lastBarTime > 0)
+               Rebuild(g_lastBarTime, g_lastClose);
+            PanelDraw();
+            return(true);
+           }
+        }
+     }
+   return(true);
+  }
+
 void UpdateTable()
   {
    if(!InpShowTable)
       return;
-   if(!g_tableCreated)
-      CreateTable();
+   if(!g_panelReady)
+      PanelCreate();
+   if(!g_panelReady || g_panelCollapsed)
+      return;
 
+   // only repaint when the displayed values changed
    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    if(price <= 0)
       price = iClose(_Symbol, PERIOD_CURRENT, 0);
-
    color cs, cw, cd;
    string ses = CurrentSession(cs);
    string wk  = Storyline(PERIOD_W1, price, cw);
    string dy  = Storyline(PERIOD_D1, price, cd);
-
-   bool changed = false;
-   if(ses != g_prevSession)
+   if(ses != g_prevSession || wk != g_prevWeekly || dy != g_prevDaily)
      {
-      ObjectSetString(0, TABLE_PREFIX + "SES_V", OBJPROP_TEXT, ses);
-      ObjectSetInteger(0, TABLE_PREFIX + "SES_V", OBJPROP_COLOR, cs);
       g_prevSession = ses;
-      changed = true;
-     }
-   if(wk != g_prevWeekly)
-     {
-      ObjectSetString(0, TABLE_PREFIX + "WK_V", OBJPROP_TEXT, wk);
-      ObjectSetInteger(0, TABLE_PREFIX + "WK_V", OBJPROP_COLOR, cw);
-      g_prevWeekly = wk;
-      changed = true;
-     }
-   if(dy != g_prevDaily)
-     {
-      ObjectSetString(0, TABLE_PREFIX + "DY_V", OBJPROP_TEXT, dy);
-      ObjectSetInteger(0, TABLE_PREFIX + "DY_V", OBJPROP_COLOR, cd);
-      g_prevDaily = dy;
-      changed = true;
-     }
-   if(changed)
+      g_prevWeekly  = wk;
+      g_prevDaily   = dy;
+      PanelDraw();
       ChartRedraw(0);
+     }
   }
+
 
 //+------------------------------------------------------------------+
 //| Standard handlers                                                 |
@@ -1185,7 +1336,14 @@ int OnInit()
    g_prevSession = "";
    g_prevWeekly  = "";
    g_prevDaily   = "";
-   g_tableCreated = false;
+   g_panelReady     = false;
+   g_panelVisible   = true;
+   g_panelCollapsed = InpPanelCollapsed;
+   g_tfFilter       = 0;
+   g_mouseDown      = false;
+
+   // mouse move events are needed to detect clicks on the canvas panel
+   ChartSetInteger(0, CHART_EVENT_MOUSE_MOVE, true);
 
    // Pre-request higher timeframe history so the first calculation has data
    MqlRates tmp[];
@@ -1194,8 +1352,7 @@ int OnInit()
    CopyRates(_Symbol, PERIOD_H1, 0, 5, tmp);
    CopyRates(_Symbol, PERIOD_W1, 0, 2, tmp);
 
-   CreateTable();
-   UpdateTable();
+   PanelCreate();
    EventSetTimer(1);
    return(INIT_SUCCEEDED);
   }
@@ -1203,6 +1360,7 @@ int OnInit()
 void OnDeinit(const int reason)
   {
    EventKillTimer();
+   PanelDestroy();
    ObjectsDeleteAll(0, OBJ_PREFIX);
    ChartRedraw(0);
   }
@@ -1233,6 +1391,9 @@ int OnCalculate(const int rates_total,
    datetime lastBarTime = time[last];
    double   lastClose   = close[last];
 
+   g_lastBarTime = lastBarTime;
+   g_lastClose   = lastClose;
+
    datetime now = TimeCurrent();
    bool newBar  = (lastBarTime != g_lastChartBar);
    bool stale   = (now - g_lastRebuild) >= 1;
@@ -1251,9 +1412,55 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
   {
    if(id == CHARTEVENT_CHART_CHANGE)
      {
-      // scroll / zoom / resize / scale change: re-pin the labels and refresh colors on next tick
+      // scroll / zoom / resize / scale change: re-pin the labels, keep the panel in its corner
       g_lastRebuild = 0;
+      PanelApplyGeometry();
       PositionLabels();
+      ChartRedraw(0);
+      return;
+     }
+
+   if(id == CHARTEVENT_MOUSE_MOVE)
+     {
+      // sparam holds the mouse button flags; bit 0 = left button pressed
+      g_mouseX = (int)lparam;
+      g_mouseY = (int)dparam;
+      bool down = ((StringToInteger(sparam) & 1) != 0);
+      if(down && !g_mouseDown)
+         HandleClick(g_mouseX, g_mouseY);
+      g_mouseDown = down;
+      return;
+     }
+
+   if(id == CHARTEVENT_CLICK)
+     {
+      HandleClick((int)lparam, (int)dparam);
+      return;
+     }
+
+   if(id == CHARTEVENT_OBJECT_CLICK && sparam == PANEL_NAME)
+     {
+      HandleClick(g_mouseX, g_mouseY);
+      return;
+     }
+
+   if(id == CHARTEVENT_KEYDOWN && (int)lparam == InpToggleKey)
+     {
+      PanelSetVisible(!g_panelVisible);
+      ChartRedraw(0);
+      return;
+     }
+  }
+
+// Same click may arrive through several events (mouse move, click, object click); handle it once.
+void HandleClick(const int x, const int y)
+  {
+   uint tick = GetTickCount();
+   if(tick - g_lastClickTick < 400)
+      return;
+   if(PanelHandleClick(x, y))
+     {
+      g_lastClickTick = tick;
       ChartRedraw(0);
      }
   }
